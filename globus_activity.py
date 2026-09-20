@@ -139,7 +139,7 @@ def build_app(
     if not cid:
         sys.exit(REGISTER_HELP)
     try:
-        globus_security.secure_directory(CONFIG_DIR)
+        globus_security.secure_directory(CONFIG_DIR, fix=fix_permissions)
         repaired = globus_security.assert_secure(
             CONFIG_DIR, TOKEN_FILE, CONFIG_FILE, fix=fix_permissions
         )

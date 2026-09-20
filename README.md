@@ -403,13 +403,36 @@ credential exposed with nothing complaining.
 
 ```sh
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/isort globus_activity.py globus_fs.py globus_security.py
-.venv/bin/black globus_activity.py globus_fs.py globus_security.py
+pre-commit install
 ```
 
-Formatting settings live in `pyproject.toml` (black at 88 columns, isort with
-the `black` profile). Every module, class, function and method carries a
-docstring.
+`tox.ini` carries the flake8, isort and pytest settings and `.bandit` the
+bandit exclusions, matching archivetar and ltfsee-globus. Every module,
+class, function and method carries a docstring.
+
+## Tests
+
+```sh
+.venv/bin/pytest                      # with coverage, per tox.ini
+.venv/bin/pytest --no-cov -q          # what the pre-commit hook runs
+.venv/bin/pytest tests/test_security.py -v
+.venv/bin/pytest -k "bookmark or maxdepth"
+```
+
+112 tests, none of which touch the network or your real credential store —
+`tests/conftest.py` monkeypatches `transfer_client()` and serves a fake
+collection tree.
+
+| file | covers |
+| --- | --- |
+| `tests/test_security.py` | the credential guard: modes, ownership, symlinks, repair |
+| `tests/test_format.py` | byte/duration formatting, timestamps, the ISSUE column |
+| `tests/test_tasks.py` | sorting, filters, column truncation, admin vs `--mine` |
+| `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
+| `tests/test_bookmarks.py` | bookmark CRUD and target resolution |
+
+The `du` and `find` tests assert on **how many listings a command makes**,
+since one API call per directory is the cost model users actually feel.
 
 ## Troubleshooting
 

@@ -203,19 +203,26 @@ def harden(path: str, must_be_dir: bool = False) -> bool:
     return True
 
 
-def secure_directory(path: str) -> None:
+def secure_directory(path: str, fix: bool = False) -> None:
     """Create the credential directory if needed, and enforce its mode.
 
     ``os.makedirs(..., exist_ok=True)`` ignores ``mode`` for a directory that
-    already exists, so the mode is applied explicitly afterwards.
+    already exists, so the mode is applied explicitly.
+
+    With ``fix`` the mode is tightened *before* the check, so that
+    ``--fix-permissions`` can repair a directory that would otherwise be
+    refused. Without it, an exposed directory raises, as ssh would.
 
     :param path: the credential directory, e.g. ``~/.globus-activity``
-    :raises InsecureCredentialStore: if the directory exists but is owned by
-        someone else, or is a symlink
+    :param fix: True to chmod an existing directory rather than refuse it
+    :raises InsecureCredentialStore: if the directory is exposed and ``fix``
+        is False, or is owned by someone else, or is a symlink
     """
-    check_path(path, must_be_dir=True)
-    if not os.path.isdir(path):
+    if not os.path.lexists(path):
         os.makedirs(path, mode=DIR_MODE, exist_ok=True)
+    elif fix:
+        harden(path, must_be_dir=True)
+    check_path(path, must_be_dir=True)
     harden(path, must_be_dir=True)
 
 

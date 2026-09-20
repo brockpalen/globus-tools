@@ -33,3 +33,11 @@ repos:
         language: system
         entry: .venv/bin/bandit --ini .bandit
         types: [python]
+
+      - id: pytest
+        name: pytest
+        stages: [commit]
+        language: system
+        entry: .venv/bin/pytest --no-cov
+        types: [python]
+        pass_filenames: false
