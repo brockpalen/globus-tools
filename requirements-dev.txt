@@ -1,0 +1,6 @@
+black
+isort
+flake8
+flake8-bugbear
+bandit
+pre-commit

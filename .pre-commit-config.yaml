@@ -1,0 +1,35 @@
+# Local hooks, matching the style used in archivetar and ltfsee-globus.
+# Those projects run the tools through `pipenv run`; this one keeps its
+# dev tools in .venv, so the entries point there instead.
+repos:
+  - repo: local
+    hooks:
+      - id: isort
+        name: isort
+        stages: [commit]
+        language: system
+        entry: .venv/bin/isort
+        types: [python]
+
+      - id: black
+        name: black
+        stages: [commit]
+        language: system
+        entry: .venv/bin/black
+        types: [python]
+
+      - id: flake8
+        name: flake8
+        stages: [commit]
+        language: system
+        entry: .venv/bin/flake8
+        types: [python]
+
+      # Security linting. Kept enabled because this tool handles refresh
+      # tokens; drop `stages` to run it only on demand.
+      - id: bandit
+        name: bandit
+        stages: [commit]
+        language: system
+        entry: .venv/bin/bandit --ini .bandit
+        types: [python]
