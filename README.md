@@ -79,7 +79,8 @@ No interactive login is needed in that mode.
 | `globus-activity ls` | list a directory on a collection |
 | `globus-activity find` | recursive search over a collection |
 | `globus-activity du` | sizes and file counts per directory |
-| `globus-activity bookmark` | named collection+path shortcuts (shared with globus-cli) |
+| `globus-activity collections` | site-wide collection shortcuts |
+| `globus-activity bookmark` | your own collection+path shortcuts (shared with globus-cli) |
 | `globus-activity consent` | grant a mapped collection's data_access consent |
 | `globus-activity login` / `logout` / `whoami` | credentials |
 
@@ -114,9 +115,61 @@ to stderr.
 Listing is metadata only, so on an HSM-backed collection like Data Den these
 read sizes **without recalling anything from tape**.
 
+### Collection shortcuts
+
+Most people only ever touch one or two collections, and nobody should have to
+look up a UUID to get at them. An administrator ships a file of `name = uuid`
+pairs and everyone gets friendly names with no per-user setup:
+
+```sh
+globus-activity ls dataden:/umms-mylab
+globus-activity du turbo:/nfs/turbo/lab -d 1
+globus-activity collections            # what names exist on this system
+```
+
+The file is dull on purpose, because it is hand-edited:
+
+```ini
+# ARC storage services
+dataden = ab65757f-00f5-4e5b-aa21-133187732a01
+turbo   = 8e3a1e59-...
+scratch = 1a2b3c4d-...:/scratch        # optional base path
+```
+
+`NAME: UUID` and bare `NAME UUID` work too, `#` starts a comment, and a file
+beginning with `{` is read as a JSON object of the same pairs. A malformed
+line is skipped rather than fatal — one typo should not break the tool for
+everyone on a shared machine. Names go on a command line, so no spaces and no
+colons.
+
+Read in increasing precedence:
+
+| | |
+| --- | --- |
+| `/etc/globus-activity/collections.conf` | shipped by an administrator |
+| `$GLOBUS_ACTIVITY_COLLECTIONS` | `:`-separated files, for Lmod |
+| `~/.globus-activity/collections.conf` | the user's own additions |
+
+From an Lmod module file:
+
+```lua
+setenv("GLOBUS_ACTIVITY_COLLECTIONS", "/sw/arcts/globus/collections.conf")
+```
+
+There is a starting point in [`examples/collections.conf`](examples/collections.conf).
+
+A shortcut with a base path behaves like a bookmark: `scratch:mylab` is
+`mylab` underneath it. With no base path the whole collection is the root, so
+`dataden:/umms-mylab` is an ordinary absolute path.
+
+**A personal bookmark of the same name wins**, the way user config beats
+`/etc` everywhere else. `globus-activity collections --check-bookmarks` flags
+any name that is being shadowed.
+
 ### Bookmarks
 
-Targets are `COLLECTION_UUID:/path` or a **bookmark name**. Bookmarks are the
+Targets are `COLLECTION_UUID:/path`, a **collection shortcut** (above) or a
+**bookmark name**. Bookmarks are the
 real server-side Globus bookmarks — the same ones `globus bookmark` and the web
 app use — so a name saved in any of them works in all of them. The commands
 and argument order match globus-cli deliberately:
@@ -419,7 +472,7 @@ class, function and method carries a docstring.
 .venv/bin/pytest -k "bookmark or maxdepth"
 ```
 
-112 tests, none of which touch the network or your real credential store —
+136 tests, none of which touch the network or your real credential store —
 `tests/conftest.py` monkeypatches `transfer_client()` and serves a fake
 collection tree.
 
@@ -430,6 +483,7 @@ collection tree.
 | `tests/test_tasks.py` | sorting, filters, column truncation, admin vs `--mine` |
 | `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
 | `tests/test_bookmarks.py` | bookmark CRUD and target resolution |
+| `tests/test_collections.py` | site shortcut parsing, precedence and resolution |
 
 The `du` and `find` tests assert on **how many listings a command makes**,
 since one API call per directory is the cost model users actually feel.

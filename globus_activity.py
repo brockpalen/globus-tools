@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover
 
 MISSING_FILTER = globus_sdk.MISSING
 
+import globus_collections  # noqa: E402
 import globus_fs  # noqa: E402  (must follow the guarded globus_sdk import)
 import globus_security  # noqa: E402
 
@@ -1165,6 +1166,34 @@ def resolve_bookmark(tc, name_or_id):
     return None
 
 
+SHORTCUT_FILE = os.path.join(CONFIG_DIR, "collections.conf")
+
+
+def site_shortcuts():
+    """Load the merged site and user collection shortcuts.
+
+    :returns: mapping of name to :class:`globus_collections.Shortcut`
+    """
+    return globus_collections.load(SHORTCUT_FILE)
+
+
+def _join_within(base, tail):
+    """Resolve a command line path beneath a named location's base path.
+
+    A bookmark or shortcut is a starting directory, so ``projects:alpha``
+    means ``alpha`` underneath it. A base of ``/`` makes that identical to
+    an absolute path, which is why a bare collection shortcut behaves the
+    way people expect.
+
+    :param base: the base path of the bookmark or shortcut
+    :param tail: the path typed after the colon, possibly empty
+    :returns: the resolved absolute path
+    """
+    if not tail:
+        return base or "/"
+    return posixpath.join(base or "/", tail.lstrip("/"))
+
+
 def _resolve_target(args, tc):
     """'UUID:/path' or 'bookmark[:/sub]' -> (collection_id, path).
 
@@ -1179,20 +1208,44 @@ def _resolve_target(args, tc):
         path = tail or "/"
         return head, path if path.startswith("/") else "/" + path
 
+    # A personal bookmark wins over a site shortcut, the same way user
+    # config wins over /etc everywhere else.
     bm = resolve_bookmark(tc, head)
-    if bm is None:
-        names = sorted(b.get("name", "") for b in bookmark_index(tc))
-        hint = (
-            "\nYour bookmarks: " + ", ".join(n for n in names if n)
-            if names
-            else "\nYou have no bookmarks yet.  Create one with:\n"
+    if bm is not None:
+        return bm["endpoint_id"], _join_within(bm.get("path"), tail)
+
+    shortcut = site_shortcuts().get(head)
+    if shortcut is not None:
+        return shortcut.collection, _join_within(shortcut.path, tail)
+
+    sys.exit(
+        f"'{head}' is not a collection UUID, a bookmark or a known "
+        f"collection name.\n" + _known_names_hint(tc)
+    )
+
+
+def _known_names_hint(tc):
+    """Build the "here is what would have worked" text for a bad target.
+
+    :param tc: an authenticated Transfer client
+    :returns: a message listing the available names
+    """
+    lines = []
+    shortcuts = sorted(site_shortcuts())
+    if shortcuts:
+        lines.append("Collections: " + ", ".join(shortcuts))
+    names = sorted(b.get("name", "") for b in bookmark_index(tc))
+    names = [n for n in names if n]
+    if names:
+        lines.append("Your bookmarks: " + ", ".join(names))
+    if not lines:
+        lines.append(
+            "No collection shortcuts are configured and you have no "
+            "bookmarks yet.\n"
             "    globus-activity bookmark create <collection-uuid>:/path/ NAME"
         )
-        sys.exit(f"'{head}' is not a collection UUID or a bookmark name." + hint)
-
-    base = bm.get("path") or "/"
-    path = posixpath.join(base, tail.lstrip("/")) if tail else base
-    return bm["endpoint_id"], path
+    lines.append("\nSee them all with:  globus-activity collections")
+    return "\n".join(lines)
 
 
 def _walk_or_explain(args, tc, collection, path, maxdepth=None):
@@ -1625,6 +1678,68 @@ def cmd_consent(args):
                 "those use a different consent path."
             )
         sys.exit(f"Listing still failed: {e.code}: {e.message}")
+
+
+def cmd_collections(args):
+    """List the configured collection shortcuts and where they came from.
+
+    :param args: parsed arguments
+    """
+    shortcuts = site_shortcuts()
+    if args.format == "json":
+        json.dump(
+            [
+                {
+                    "name": s.name,
+                    "collection": s.collection,
+                    "path": s.path,
+                    "source": s.source,
+                }
+                for s in sorted(shortcuts.values(), key=lambda s: s.name)
+            ],
+            sys.stdout,
+            indent=2,
+        )
+        print()
+        return
+
+    if not shortcuts:
+        print("No collection shortcuts are configured.\n")
+        print("Looked in:")
+        for path in globus_collections.search_paths(SHORTCUT_FILE):
+            print(f"    {path}")
+        print(
+            "\nAn administrator can ship a site-wide file, or you can write\n"
+            f"your own at {SHORTCUT_FILE}:\n\n"
+            "    dataden = ab65757f-00f5-4e5b-aa21-133187732a01\n"
+        )
+        return
+
+    shadowed = set()
+    if args.check_bookmarks:
+        try:
+            shadowed = {
+                b.get("name") for b in bookmark_index(transfer_client(args))
+            } & set(shortcuts)
+        except SystemExit:
+            shadowed = set()
+
+    rows = [
+        (
+            s.name,
+            s.collection,
+            s.path,
+            s.source,
+            "shadowed by your bookmark" if s.name in shadowed else "",
+        )
+        for s in sorted(shortcuts.values(), key=lambda s: s.name)
+    ]
+    headers = ("NAME", "COLLECTION", "PATH", "SOURCE", "")
+    widths = [max([len(r[i]) for r in rows] + [len(headers[i])]) for i in range(5)]
+    if not args.no_header:
+        print("  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)).rstrip())
+    for row in rows:
+        print("  ".join(c.ljust(widths[i]) for i, c in enumerate(row)).rstrip())
 
 
 def cmd_bookmark_list(args):
@@ -2064,6 +2179,18 @@ def build_parser():
     c.add_argument("--client-id", help="Globus client UUID")
     c.set_defaults(func=cmd_consent)
 
+    col = sub.add_parser(
+        "collections",
+        help="named collection shortcuts configured for this system",
+    )
+    col.add_argument(
+        "--check-bookmarks",
+        action="store_true",
+        help="also flag names your own bookmarks shadow (makes an API call)",
+    )
+    add_common(col)
+    col.set_defaults(func=cmd_collections)
+
     # Bookmarks are server-side and shared with `globus bookmark` and the web
     # app, so the names and argument order deliberately match globus-cli.
     bm = sub.add_parser(
@@ -2123,6 +2250,9 @@ def build_parser():
     add_common(who)
     who.set_defaults(func=cmd_whoami)
 
+    # Recorded so main() can tell a command from a bare flag without keeping
+    # a second list in step with this one.
+    p.command_names = set(sub.choices)
     return p
 
 
@@ -2154,23 +2284,7 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     argv = _glue_negative_values(argv)
     parser = build_parser()
-    known = {
-        "tasks",
-        "ls",
-        "watch",
-        "history",
-        "task",
-        "endpoints",
-        "login",
-        "logout",
-        "whoami",
-        "find",
-        "du",
-        "consent",
-        "bookmark",
-        "-h",
-        "--help",
-    }
+    known = parser.command_names | {"-h", "--help"}
     if not argv or argv[0] not in known:
         argv = ["tasks"] + argv  # bare `globus-activity --errors` works
     args = parser.parse_args(argv)
