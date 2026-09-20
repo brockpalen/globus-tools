@@ -1,11 +1,30 @@
 # globus-activity
 
-A greppable, one-line-per-task view of the Globus web console **Activity** tab,
-for subscription / endpoint administrators.
+A greppable, one-line-per-task view of the Globus web console **Activity**
+tab, plus `ls`, `find` and `du` for collections that are only reachable over
+Globus.
 
-It calls the same Transfer API that the console does
-(`GET /endpoint_manager/task_list` and friends), so you see every task on the
-collections where you hold an activity role — not just your own tasks.
+It calls the same Transfer API the console does, so you see every task on the
+collections where you hold an activity role — not just your own.
+
+```
+$ globus-activity --errors
+TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES  FLT    AGE  SOURCE               DEST
+0f3a91c2  ACTIVE    PERMISSION_DENIED    user2@umich.edu  0B/s   600/2400  15.0G   14  1h14m  Great Lakes scratch  Turbo Research Storage
+7b1e4d80  INACTIVE  EXPIRED_CREDENTIALS  user3@umich.edu  0B/s   900/3600  22.5G    3  1h51m  Great Lakes scratch  Turbo Research Storage
+```
+
+```
+$ globus-activity du dataden:/umms-mylab -d 1
+  SIZE  FILES  DIRS  PATH
+104.1G      7     4  /umms-mylab
+100.0G      1     1  /umms-mylab/backups
+  4.1G      5     1  /umms-mylab/fastq
+```
+
+**[USAGE.md](USAGE.md) is the full reference** — every command, every option,
+with examples. This page covers what it is, who can use it, and how to set it
+up.
 
 ## Who can use it
 
@@ -67,323 +86,92 @@ export GLOBUS_ACTIVITY_CLIENT_SECRET=<secret>
 
 No interactive login is needed in that mode.
 
-## Commands
+## What it does
 
-| Command | What it does |
+| command | |
 | --- | --- |
-| `globus-activity` / `tasks` | in-progress transfers (`ACTIVE` + `INACTIVE`), one per line |
-| `globus-activity watch` | same table, refreshed on an interval, with a live rate column |
-| `globus-activity history` | completed tasks for an endpoint (needs `--endpoint`) |
-| `globus-activity task <id>` | full task document, `--events` for the error log |
-| `globus-activity endpoints` | endpoints/collections you are allowed to monitor |
+| `globus-activity` / `tasks` | in-progress transfers, one line each |
+| `globus-activity watch` | the same table, refreshed, with a live rate column |
+| `globus-activity history` | completed tasks |
+| `globus-activity task <id>` | one task in full, `--events` for the error log |
+| `globus-activity endpoints` | collections you are allowed to monitor |
 | `globus-activity ls` | list a directory on a collection |
-| `globus-activity find` | recursive search over a collection |
+| `globus-activity find` | recursive search, with size and age filters |
 | `globus-activity du` | sizes and file counts per directory |
 | `globus-activity collections` | site-wide collection shortcuts |
-| `globus-activity bookmark` | your own collection+path shortcuts (shared with globus-cli) |
-| `globus-activity consent` | grant a mapped collection's data_access consent |
+| `globus-activity bookmark` | your own shortcuts, shared with globus-cli |
+| `globus-activity consent` | unlock a GCS v5 mapped collection for listing |
 | `globus-activity login` / `logout` / `whoami` | credentials |
 
-Add `--mine` to `ls`, `watch` or `history` to read `GET /task_list` — your own
-tasks, no role required:
+A few things it is good at:
 
 ```sh
-globus-activity --mine                        # my in-progress transfers
-globus-activity --mine --errors               # ...that are unhappy
-globus-activity watch --mine -n 5
-globus-activity history --mine --hours 48     # no --endpoint needed here
-globus-activity task <id> --mine --events     # my own task, no role
-```
-
-`--mine` drops the `OWNER` column (they are all yours) and ignores the
-admin-only server-side filters (`--user`, `--local-user`, `--min-faults`,
-`--paused`), warning when you pass one. `--endpoint` still works, matched
-locally. `task` falls back to the user view automatically on a 403, so
-`globus-activity task <id>` works for your own tasks without the flag.
-
-Any flag can be given without the `tasks` subcommand: `globus-activity
---errors` is the same as `globus-activity tasks --errors`.
-
-## Filesystem helpers
-
-For collections that are only reachable over Globus — no shell, no `ssh`, no
-`find`. These walk the tree with `operation_ls`, which is **not recursive**:
-one API call per directory. A tree with 50,000 directories is 50,000 round
-trips, so they run a bounded thread pool (`-j`, default 8) and print progress
-to stderr.
-
-Listing is metadata only, so on an HSM-backed collection like Data Den these
-read sizes **without recalling anything from tape**.
-
-### Collection shortcuts
-
-Most people only ever touch one or two collections, and nobody should have to
-look up a UUID to get at them. An administrator ships a file of `name = uuid`
-pairs and everyone gets friendly names with no per-user setup:
-
-```sh
-globus-activity ls dataden:/umms-mylab
-globus-activity du turbo:/nfs/turbo/lab -d 1
-globus-activity collections            # what names exist on this system
-```
-
-The file is dull on purpose, because it is hand-edited:
-
-```ini
-# ARC storage services
-dataden = ab65757f-00f5-4e5b-aa21-133187732a01
-turbo   = 8e3a1e59-...
-scratch = 1a2b3c4d-...:/scratch        # optional base path
-```
-
-`NAME: UUID` and bare `NAME UUID` work too, `#` starts a comment, and a file
-beginning with `{` is read as a JSON object of the same pairs. A malformed
-line is skipped rather than fatal — one typo should not break the tool for
-everyone on a shared machine. Names go on a command line, so no spaces and no
-colons.
-
-Read in increasing precedence:
-
-| | |
-| --- | --- |
-| `/etc/globus-activity/collections.conf` | shipped by an administrator |
-| `$GLOBUS_ACTIVITY_COLLECTIONS` | `:`-separated files, for Lmod |
-| `~/.globus-activity/collections.conf` | the user's own additions |
-
-From an Lmod module file:
-
-```lua
-setenv("GLOBUS_ACTIVITY_COLLECTIONS", "/sw/arcts/globus/collections.conf")
-```
-
-There is a starting point in [`examples/collections.conf`](examples/collections.conf).
-
-A shortcut with a base path behaves like a bookmark: `scratch:mylab` is
-`mylab` underneath it. With no base path the whole collection is the root, so
-`dataden:/umms-mylab` is an ordinary absolute path.
-
-**A personal bookmark of the same name wins**, the way user config beats
-`/etc` everywhere else. `globus-activity collections --check-bookmarks` flags
-any name that is being shadowed.
-
-### Bookmarks
-
-Targets are `COLLECTION_UUID:/path`, a **collection shortcut** (above) or a
-**bookmark name**. Bookmarks are the
-real server-side Globus bookmarks — the same ones `globus bookmark` and the web
-app use — so a name saved in any of them works in all of them. The commands
-and argument order match globus-cli deliberately:
-
-```sh
-globus-activity bookmark create 1234abcd-...:/projects/ projects
-globus-activity bookmark list
-globus-activity bookmark show projects            # ENDPOINT_ID:PATH
-globus-activity bookmark show projects -v         # all fields
-globus-activity bookmark rename projects proj2
-globus-activity bookmark delete proj2
-```
-
-Then use the name anywhere a target is taken:
-
-```sh
-globus-activity ls projects
-globus-activity du projects -d 1
-globus-activity find projects --min-size 1G
-```
-
-A path after a bookmark name is **relative to the bookmark**, so
-`projects:alpha/sub` is `alpha/sub` underneath wherever `projects` points.
-A raw UUID keeps absolute-path semantics: `1234abcd-...:/projects/alpha`.
-
-`bookmark show` prints `ENDPOINT_ID:PATH` by default, like globus-cli, so it
-substitutes into other commands:
-
-```sh
-globus ls "$(globus-activity bookmark show projects)"
-```
-
-### ls
-
-```sh
-globus-activity ls projects              # names, in columns on a tty
-globus-activity ls -l projects           # mode, owner, size, mtime
-globus-activity ls -lS projects          # largest first
-globus-activity ls -lt projects          # newest first
-globus-activity ls -lR projects          # recursive
-globus-activity ls -F projects           # mark directories with /
-```
-
-```
-drwxr-xr-x  brockp  hpcstaff      0B  2026-09-01 12:00:00  project-a
--rw-r--r--  brockp  hpcstaff  100.0M  2026-09-01 12:00:00  file1.bin
-```
-
-Behaves the way `ls` does: multi-column when writing to a terminal, one name
-per line when piped (`-1` forces that on a terminal too). Sizes are human
-units by default, `-b` for raw bytes. `-r` reverses, `--format tsv|csv|json`
-for machine use.
-
-Unlike `ls`, dotfiles are shown by default — that is the Globus API's
-behaviour and usually what an admin wants. `--no-hidden` skips them.
-
-One directory is one API call. `-R` walks, so it costs one call per
-directory and takes `-j`/`--maxdepth` like `find`.
-
-### du
-
-```sh
-globus-activity du projects              # whole tree, by size
-globus-activity du projects -d 1         # like du -d 1 -h
-globus-activity du projects -d 2 --sort files
-globus-activity du projects --bytes --format tsv
-```
-
-```
-  SIZE  FILES  DIRS  PATH
-104.1G      7     4  /data
-100.0G      1     1  /data/project-b
-  4.1G      5     1  /data/project-a
-```
-
-`FILES` and `DIRS` are cumulative counts, so this answers "how big" and "how
-many files" in one walk — no separate count command needed. `-d/--depth`
-limits what is *printed*; `--maxdepth` limits what is *walked* (and therefore
-changes the totals, like `du -d` versus not descending at all).
-
-### find
-
-```sh
-globus-activity find projects --name '*.fastq.gz'
-globus-activity find projects --type f --min-size 100M --long
-globus-activity find projects --older 365d --min-size 1G --summary
-globus-activity find projects --maxdepth 1 --long        # ls, the long way
-globus-activity find projects --name '*.tmp' -0 | xargs -0 -n1 echo
-```
-
-Filters: `--name`/`--iname` (globs), `--type f|d`, `--min-size`/`--max-size`
-(`100M`, `2G`, `500Ki`), `--newer`/`--older` (`7d`, `12h`, or an ISO date),
-`--maxdepth`, `--limit`.
-
-Output streams as directories come back, so **ordering is not deterministic**
-— the walk is concurrent. Pipe through `sort` if you need stable output.
-
-### Consent
-
-GCS v5 mapped collections need an extra `data_access` consent before they can
-be listed. If a walk fails with `ConsentRequired`:
-
-```sh
-globus-activity consent <collection-uuid>
-```
-
-This does not apply to guest collections, GCP, or High Assurance collections
-— those use a different consent path, and `data_access` on them fails with
-"Unknown Scope".
-
-### Cost
-
-Every directory is an API call, so `du` on a large tree is slow and counts
-against Globus rate limits. Raise `-j` carefully; the walk retries 429s and
-5xxs with backoff. Directories that cannot be listed (permissions, dead
-symlinks) are collected and reported at the end rather than aborting the
-walk — a 40-minute walk should not die on its last directory.
-
-## Filtering
-
-Server-side (fast, done by the Transfer API):
-
-```sh
-globus-activity -e <collection-uuid>          # one collection (source or dest)
-globus-activity -e <uuid> --endpoint-use destination
-globus-activity -u jdoe@umich.edu             # by Globus identity (username or UUID)
-globus-activity --local-user jdoe             # by the local POSIX account used
-globus-activity --min-faults 5                # tasks that keep retrying
-globus-activity --paused                      # tasks held by a pause rule
-globus-activity --status ACTIVE               # exclude INACTIVE
-```
-
-Client-side conveniences:
-
-```sh
-globus-activity --errors                      # faulting, paused, or bad nice_status
+globus-activity --errors                      # faulting, paused or stuck
 globus-activity --max-rate 0                  # stalled: no bytes moving
-globus-activity --min-rate 1e9                # the heavy hitters
-globus-activity --older-than 120              # running for 2+ hours
-globus-activity --summary                     # aggregate line under the table
-```
-
-And of course:
-
-```sh
-globus-activity | grep -i turbo
-globus-activity --format tsv | awk -F'\t' '$5=="0B/s"'
+globus-activity watch -n 5 --errors           # a live problem board
+globus-activity --mine                        # your own transfers, no role needed
+globus-activity find dataden:/lab --older 365d --min-size 1G
+globus-activity du dataden:/lab -d 1
 globus-activity --format json | jq '.[] | select(.faults > 0) | .task_id'
 ```
 
-## Output control
+Filesystem commands walk the tree with one API call per directory, since the
+Transfer API has no recursive listing. They run a bounded thread pool and
+report progress. Listing is metadata only, so on tape-backed storage `du` and
+`find` read sizes **without recalling anything**.
+
+See [USAGE.md](USAGE.md) for every option.
+
+## Collection shortcuts
+
+So that nobody has to look up a UUID for the collections everyone uses. An
+administrator ships a file of `name = uuid` pairs and everyone gets friendly
+names with no per-user setup:
 
 ```sh
-globus-activity --wide                        # every useful column
-globus-activity --fields id,owner,rate,src,dst,label
-globus-activity --sort=-bytes                 # '-' prefix = descending
-globus-activity --format tsv --no-header      # machine friendly
+globus-activity ls dataden:/umms-mylab
+globus-activity collections                   # what names exist here
 ```
 
-Long values are shortened with `~` only when writing to a terminal; piping to
-`grep`/`awk` gives you the untruncated text. `--width 0` or `--no-truncate`
-forces full values on a terminal too.
+### Format
 
-Available fields:
+```ini
+# NAME = COLLECTION_UUID[:/optional/base/path]
 
-`id`, `fullid`, `status`, `issue`, `reason`, `owner`, `type`, `rate`, `cur`,
-`bytes`, `files`, `pct`, `faults`, `age`, `start`, `done`, `deadline`, `src`,
-`dst`, `srcid`, `dstid`, `srcuser`, `dstuser`, `label`, `cmd`, `paused`,
-`sync`, `enc`
-
-Notes on a few of them:
-
-- **`rate`** is `effective_bytes_per_second` — the task's average since it was
-  submitted, which is what the console shows. It lags a rate change.
-- **`cur`** is computed locally from the change in `bytes_transferred` between
-  two polls, so it only has a value in `watch` mode (and is blank on the first
-  refresh). This is the number to watch when you want "right now".
-- **`issue`** is `PAUSED`, the task's `nice_status`
-  (`PERMISSION_DENIED`, `ENDPOINT_ERROR`, `CONNECT_FAILED`,
-  `EXPIRED_CREDENTIALS`, `QUOTA_EXCEEDED`, ...), or `-` when healthy. It is
-  never truncated, so `grep PERMISSION_DENIED` always works.
-- **`pct`** is by file count, not bytes — Globus does not report total bytes
-  for a running task.
-- **`files`** reads `transferred/total`, with `+Ns` appended when files were
-  skipped.
-
-## Watching
-
-```sh
-globus-activity watch -n 5                    # refresh every 5s, clears screen
-globus-activity watch --errors --summary
-globus-activity watch --no-clear | tee -a activity.log
+dataden = ab65757f-00f5-4e5b-aa21-133187732a01
+turbo   = 8e3a1e59-0000-0000-0000-000000000000
+scratch = 1a2b3c4d-0000-0000-0000-000000000000:/scratch
 ```
 
-## History
+`NAME: UUID` and bare `NAME UUID` also parse, `#` starts a comment, and a
+file beginning with `{` is read as a JSON object of the same pairs. A
+malformed line is skipped rather than fatal — one typo must not break the
+tool for everyone on a shared machine. Names are typed on a command line, so
+no spaces and no colons.
 
-The admin view only returns *completed* tasks per endpoint, so `history`
-requires `--endpoint` (this restriction does not apply to `--mine`):
+### Where they are read from
 
-```sh
-globus-activity history -e <uuid> --hours 48
-globus-activity history -e <uuid> --status FAILED --summary
-globus-activity history -e all --hours 6      # loops over every monitored endpoint
+Later files win, so a user can override what an administrator ships:
+
+| path | for |
+| --- | --- |
+| `/etc/globus-activity/collections.conf` | everyone on the machine |
+| `$GLOBUS_ACTIVITY_COLLECTIONS` | `:`-separated list of files, for Lmod |
+| `~/.globus-activity/collections.conf` | one user's own additions |
+
+```lua
+-- in an Lmod module file
+setenv("GLOBUS_ACTIVITY_COLLECTIONS", "/sw/arcts/globus/collections.conf")
 ```
 
-## Digging into one task
+Start from [`examples/collections.conf`](examples/collections.conf).
+`globus-activity collections` lists what resolved and which file each name
+came from; with nothing configured it prints the paths it looked in.
 
-```sh
-globus-activity task 0f3a91c2-... --events -v
-```
-
-`--events` is the admin event log: each fault with its code, description and
-the raw server message (`-v`) — usually the fastest way to answer "why is this
-user's transfer stuck?".
+A shortcut with a base path behaves like a bookmark — `scratch:mylab` is
+`mylab` underneath it. **A personal Globus bookmark of the same name wins**,
+the way user config beats `/etc` everywhere else;
+`collections --check-bookmarks` flags a name being shadowed.
 
 ## Requirements / layout
 
@@ -472,7 +260,7 @@ class, function and method carries a docstring.
 .venv/bin/pytest -k "bookmark or maxdepth"
 ```
 
-136 tests, none of which touch the network or your real credential store —
+143 tests, none of which touch the network or your real credential store —
 `tests/conftest.py` monkeypatches `transfer_client()` and serves a fake
 collection tree.
 
@@ -484,9 +272,12 @@ collection tree.
 | `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
 | `tests/test_bookmarks.py` | bookmark CRUD and target resolution |
 | `tests/test_collections.py` | site shortcut parsing, precedence and resolution |
+| `tests/test_docs.py` | that USAGE.md still documents every option |
 
 The `du` and `find` tests assert on **how many listings a command makes**,
-since one API call per directory is the cost model users actually feel.
+since one API call per directory is the cost model users actually feel. And
+`test_docs.py` fails when an option exists in the parser but not in
+[USAGE.md](USAGE.md), so the reference cannot quietly fall behind.
 
 ## Troubleshooting
 

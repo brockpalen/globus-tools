@@ -1956,6 +1956,54 @@ def add_list_opts(p):
     )
 
 
+MAIN_EPILOG = """\
+targets (for ls, find, du)
+  UUID:/path              a collection UUID and an absolute path
+  name:/path              a collection shortcut or bookmark, plus a path
+  name                    that shortcut or bookmark's own location
+  A path after a name is resolved beneath it. Your own bookmark wins over a
+  site shortcut of the same name.
+
+collection shortcuts        (see: globus-activity collections)
+  read from, later winning:
+    /etc/globus-activity/collections.conf
+    $GLOBUS_ACTIVITY_COLLECTIONS      colon separated files, for Lmod
+    ~/.globus-activity/collections.conf
+  format:
+    NAME = COLLECTION_UUID[:/base/path]       # also NAME: UUID, or NAME UUID
+
+fields (for --fields and --sort)
+{fields}
+
+Full reference, with examples: USAGE.md
+""".format(
+    fields="\n".join(
+        "  " + ", ".join(sorted(FIELDS)[i : i + 6]) for i in range(0, len(FIELDS), 6)
+    )
+)
+
+COLLECTIONS_EPILOG = """\
+Shortcuts let people type a name instead of a collection UUID. An
+administrator ships them for everyone; a user can add their own.
+
+read from, later winning:
+  /etc/globus-activity/collections.conf     everyone on this machine
+  $GLOBUS_ACTIVITY_COLLECTIONS              colon separated files, for Lmod
+  ~/.globus-activity/collections.conf       your own additions
+
+format:
+  # NAME = COLLECTION_UUID[:/optional/base/path]
+  dataden = ab65757f-00f5-4e5b-aa21-133187732a01
+  scratch = 1a2b3c4d-0000-0000-0000-000000000000:/scratch
+
+  NAME: UUID and bare NAME UUID also parse. '#' starts a comment. A file
+  beginning with '{' is read as JSON. A malformed line is skipped, not
+  fatal. Names take no spaces and no colons.
+
+A bookmark of the same name takes precedence; --check-bookmarks flags those.
+"""
+
+
 def build_parser():
     """Build the full command line parser.
 
@@ -1964,7 +2012,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="globus-activity",
         description="Table view of the Globus console Activity tab, one line per task.",
-        epilog="Fields: " + ", ".join(sorted(FIELDS)),
+        epilog=MAIN_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="cmd")
@@ -2182,6 +2230,8 @@ def build_parser():
     col = sub.add_parser(
         "collections",
         help="named collection shortcuts configured for this system",
+        epilog=COLLECTIONS_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     col.add_argument(
         "--check-bookmarks",
