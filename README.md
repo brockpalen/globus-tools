@@ -166,7 +166,9 @@ setenv("GLOBUS_ACTIVITY_COLLECTIONS", "/sw/arcts/globus/collections.conf")
 
 Start from [`examples/collections.conf`](examples/collections.conf).
 `globus-activity collections` lists what resolved and which file each name
-came from; with nothing configured it prints the paths it looked in.
+came from. With nothing configured it prints every place it looked -- the
+environment variable included, even when unset -- and points a single user at
+`bookmark create` instead, which is usually what they want.
 
 A shortcut with a base path behaves like a bookmark — `scratch:mylab` is
 `mylab` underneath it. **A personal Globus bookmark of the same name wins**,
@@ -260,7 +262,7 @@ class, function and method carries a docstring.
 .venv/bin/pytest -k "bookmark or maxdepth"
 ```
 
-143 tests, none of which touch the network or your real credential store —
+149 tests, none of which touch the network or your real credential store —
 `tests/conftest.py` monkeypatches `transfer_client()` and serves a fake
 collection tree.
 

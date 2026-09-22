@@ -197,3 +197,82 @@ def test_collections_command_explains_when_none_are_configured(
     out = capsys.readouterr().out
     assert "No collection shortcuts are configured" in out
     assert "Looked in:" in out
+
+
+def test_empty_state_lists_every_source_including_an_unset_env_var(
+    run, capsys, monkeypatch, tmp_path
+):
+    """Showing the variable even when unset explains the mechanism exists."""
+    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(gc.ENV_VAR, raising=False)
+    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    run(["collections"])
+    out = capsys.readouterr().out
+    assert gc.ENV_VAR in out
+    assert "not set" in out
+
+
+def test_empty_state_shows_no_realistic_looking_shortcut(
+    run, capsys, monkeypatch, tmp_path
+):
+    """A concrete example here reads as though that shortcut already exists.
+
+    Someone hit exactly this: the empty state showed
+    ``dataden = ab65757f-...`` as an example, so they ran
+    ``du dataden:/path`` and it failed. The template must be obviously a
+    template.
+    """
+    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(gc.ENV_VAR, raising=False)
+    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    run(["collections"])
+    out = capsys.readouterr().out
+    assert "<name> = <collection-uuid>" in out
+    assert DATADEN not in out
+    assert "dataden =" not in out
+
+
+def test_empty_state_points_at_bookmarks_for_a_single_user(
+    run, capsys, monkeypatch, tmp_path
+):
+    """A user wanting one name should be sent to bookmarks, not a config file."""
+    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(gc.ENV_VAR, raising=False)
+    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    run(["collections"])
+    assert "bookmark create" in capsys.readouterr().out
+
+
+def test_unknown_name_says_when_no_shortcuts_are_configured(
+    client, monkeypatch, tmp_path
+):
+    """Omitting the line silently leaves the reader guessing why."""
+    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(gc.ENV_VAR, raising=False)
+    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    with pytest.raises(SystemExit) as caught:
+        ga._resolve_target(Target("dataden"), client)
+    message = str(caught.value)
+    assert "none configured on this system" in message
+    assert "A collection UUID always works" in message
+
+
+def test_unknown_name_says_when_you_have_no_bookmarks(site, monkeypatch):
+    """The same courtesy for the other source."""
+    from conftest import FakeTransferClient
+
+    empty = FakeTransferClient()
+    monkeypatch.setattr(empty, "bookmark_list", lambda: [])
+    with pytest.raises(SystemExit) as caught:
+        ga._resolve_target(Target("nope"), empty)
+    assert "none yet" in str(caught.value)
+
+
+def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
+    """The listing says what each location is for, not just its path."""
+    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", "/etc/x.conf")
+    monkeypatch.setenv(gc.ENV_VAR, "/from/module.conf")
+    rows = gc.describe_sources("/home/u/.globus-activity/collections.conf")
+    assert rows[0] == ("/etc/x.conf", "site-wide, shipped by an administrator")
+    assert rows[1][1] == f"from ${gc.ENV_VAR}"
+    assert rows[-1][1] == "yours"

@@ -1227,24 +1227,35 @@ def _resolve_target(args, tc):
 def _known_names_hint(tc):
     """Build the "here is what would have worked" text for a bad target.
 
+    Names both sources explicitly, and says when one of them is empty --
+    silently omitting it leaves the reader guessing whether the name was
+    wrong or the feature is simply unconfigured here.
+
     :param tc: an authenticated Transfer client
     :returns: a message listing the available names
     """
     lines = []
+
     shortcuts = sorted(site_shortcuts())
     if shortcuts:
-        lines.append("Collections: " + ", ".join(shortcuts))
-    names = sorted(b.get("name", "") for b in bookmark_index(tc))
-    names = [n for n in names if n]
-    if names:
-        lines.append("Your bookmarks: " + ", ".join(names))
-    if not lines:
+        lines.append("Collection shortcuts: " + ", ".join(shortcuts))
+    else:
         lines.append(
-            "No collection shortcuts are configured and you have no "
-            "bookmarks yet.\n"
-            "    globus-activity bookmark create <collection-uuid>:/path/ NAME"
+            "Collection shortcuts: none configured on this system "
+            "(globus-activity collections)"
         )
-    lines.append("\nSee them all with:  globus-activity collections")
+
+    names = sorted(n for n in (b.get("name") for b in bookmark_index(tc)) if n)
+    if names:
+        lines.append("Your bookmarks:       " + ", ".join(names))
+    else:
+        lines.append(
+            "Your bookmarks:       none yet "
+            "(globus-activity bookmark create <uuid>:/ <name>)"
+        )
+
+    lines.append("")
+    lines.append("A collection UUID always works:  globus-activity du <uuid>:/path")
     return "\n".join(lines)
 
 
@@ -1680,6 +1691,41 @@ def cmd_consent(args):
         sys.exit(f"Listing still failed: {e.code}: {e.message}")
 
 
+def _no_shortcuts_message():
+    """Explain that nothing is configured, and what to do about it.
+
+    Deliberately avoids a realistic-looking example: a line such as
+    ``dataden = ab65757f-...`` here reads as though that shortcut already
+    exists, which is exactly the wrong impression to leave.
+
+    :returns: the message to print
+    """
+    rows = globus_collections.describe_sources(SHORTCUT_FILE)
+    width = max(len(location) for location, _ in rows)
+    lines = [
+        "No collection shortcuts are configured on this system.",
+        "",
+        "Looked in:",
+    ]
+    lines += [f"    {location.ljust(width)}   {note}" for location, note in rows]
+    lines += [
+        "",
+        "To give a collection your own short name, a bookmark is usually",
+        "easier -- Globus stores it, so globus-cli and the web app see it too:",
+        "",
+        "    globus-activity bookmark create <collection-uuid>:/ <name>",
+        "",
+        "To ship names for everyone on this system, write the site file with",
+        "one line per collection, substituting your own values:",
+        "",
+        f"    # {globus_collections.DEFAULT_SITE_FILE}",
+        "    <name> = <collection-uuid>",
+        "",
+        "Full format:  globus-activity collections --help",
+    ]
+    return "\n".join(lines)
+
+
 def cmd_collections(args):
     """List the configured collection shortcuts and where they came from.
 
@@ -1704,15 +1750,7 @@ def cmd_collections(args):
         return
 
     if not shortcuts:
-        print("No collection shortcuts are configured.\n")
-        print("Looked in:")
-        for path in globus_collections.search_paths(SHORTCUT_FILE):
-            print(f"    {path}")
-        print(
-            "\nAn administrator can ship a site-wide file, or you can write\n"
-            f"your own at {SHORTCUT_FILE}:\n\n"
-            "    dataden = ab65757f-00f5-4e5b-aa21-133187732a01\n"
-        )
+        print(_no_shortcuts_message())
         return
 
     shadowed = set()

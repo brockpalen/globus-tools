@@ -87,8 +87,9 @@ globus-activity collections --format json
 | --- | --- |
 | `--check-bookmarks` | mark names shadowed by one of your own bookmarks (makes an API call) |
 
-With nothing configured it prints the paths it looked in, so you know where
-to put the file.
+With nothing configured it prints every place it looked, the environment
+variable included even when unset, and suggests `bookmark create` for a
+single user who just wants one name.
 
 ---
 

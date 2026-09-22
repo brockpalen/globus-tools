@@ -30,6 +30,7 @@ import re
 
 __all__ = [
     "DEFAULT_SITE_FILE",
+    "describe_sources",
     "Shortcut",
     "load",
     "parse",
@@ -152,6 +153,29 @@ def search_paths(user_file: str | None = None) -> list[str]:
     if user_file:
         paths.append(user_file)
     return paths
+
+
+def describe_sources(user_file: str | None = None) -> list[tuple[str, str]]:
+    """List the shortcut sources for display, with what each one is.
+
+    Includes the environment variable even when it is unset, so the reader
+    can see the mechanism exists rather than wondering why a file they set
+    is being ignored.
+
+    :param user_file: the per-user file, typically in the config directory
+    :returns: ``(location, description)`` pairs, lowest precedence first
+    """
+    rows = [(DEFAULT_SITE_FILE, "site-wide, shipped by an administrator")]
+    env_value = os.environ.get(ENV_VAR, "")
+    if env_value:
+        for path in env_value.split(os.pathsep):
+            if path:
+                rows.append((path, f"from ${ENV_VAR}"))
+    else:
+        rows.append((f"${ENV_VAR}", "not set"))
+    if user_file:
+        rows.append((user_file, "yours"))
+    return rows
 
 
 def load(user_file: str | None = None) -> dict[str, Shortcut]:
