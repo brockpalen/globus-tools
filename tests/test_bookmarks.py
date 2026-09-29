@@ -7,7 +7,7 @@ the web app, so the command names and argument order match globus-cli.
 import pytest
 from conftest import COLLECTION
 
-import globus_activity as ga
+from globus_console_cli import fs
 
 
 @pytest.fixture(autouse=True)
@@ -16,9 +16,9 @@ def clear_bookmark_cache():
 
     :returns: nothing; the cache is cleared before and after each test
     """
-    ga._BOOKMARK_CACHE = None
+    fs._BOOKMARK_CACHE = None
     yield
-    ga._BOOKMARK_CACHE = None
+    fs._BOOKMARK_CACHE = None
 
 
 class Target:
@@ -34,7 +34,7 @@ class Target:
 
 def test_uuid_target_is_absolute(client):
     """A raw UUID keeps ordinary absolute path semantics."""
-    assert ga._resolve_target(Target(f"{COLLECTION}:/data/x"), client) == (
+    assert fs._resolve_target(Target(f"{COLLECTION}:/data/x"), client) == (
         COLLECTION,
         "/data/x",
     )
@@ -42,35 +42,35 @@ def test_uuid_target_is_absolute(client):
 
 def test_bare_uuid_means_the_root(client):
     """No path after the colon is the collection root."""
-    assert ga._resolve_target(Target(COLLECTION), client) == (COLLECTION, "/")
+    assert fs._resolve_target(Target(COLLECTION), client) == (COLLECTION, "/")
 
 
 def test_bookmark_name_resolves_to_its_endpoint_and_path(client):
     """The whole point: a name instead of a UUID."""
-    assert ga._resolve_target(Target("projects"), client) == (COLLECTION, "/data/")
+    assert fs._resolve_target(Target("projects"), client) == (COLLECTION, "/data/")
 
 
 def test_path_after_a_bookmark_is_relative_to_it(client):
     """A bookmark is a starting directory, so a suffix descends from it."""
-    collection, path = ga._resolve_target(Target("projects:project-a"), client)
+    collection, path = fs._resolve_target(Target("projects:project-a"), client)
     assert (collection, path) == (COLLECTION, "/data/project-a")
 
 
 def test_leading_slash_after_a_bookmark_is_still_relative(client):
     """`projects:/sub` means sub *within* the bookmark, not the root."""
-    _, path = ga._resolve_target(Target("projects:/project-a"), client)
+    _, path = fs._resolve_target(Target("projects:/project-a"), client)
     assert path == "/data/project-a"
 
 
 def test_bookmark_id_also_resolves(client):
     """globus-cli accepts an id or a name, so this does too."""
-    assert ga._resolve_target(Target("bm-0002"), client)[1] == "/"
+    assert fs._resolve_target(Target("bm-0002"), client)[1] == "/"
 
 
 def test_unknown_name_lists_what_is_available(client, capsys):
     """A typo should show the names that would have worked."""
     with pytest.raises(SystemExit) as caught:
-        ga._resolve_target(Target("nope"), client)
+        fs._resolve_target(Target("nope"), client)
     assert "projects" in str(caught.value)
 
 

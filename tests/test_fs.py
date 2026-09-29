@@ -9,8 +9,7 @@ import datetime as dt
 import pytest
 from conftest import GB, MB, FakeTransferClient
 
-import globus_activity as ga
-import globus_fs
+from globus_console_cli import fs, walk
 
 COLL = "cccc1111-2222-3333-4444-555566667777"
 
@@ -30,26 +29,26 @@ COLL = "cccc1111-2222-3333-4444-555566667777"
 )
 def test_parse_size(text, expected):
     """--min-size takes the suffixes people actually type."""
-    assert globus_fs.parse_size(text) == expected
+    assert walk.parse_size(text) == expected
 
 
 def test_parse_size_rejects_junk():
     """A bad size is an error, not a silent zero."""
     with pytest.raises(ValueError):
-        globus_fs.parse_size("many")
+        walk.parse_size("many")
 
 
 @pytest.mark.parametrize("text,days", [("7", 7), ("7d", 7), ("1w", 7), ("24h", 1)])
 def test_parse_age(text, days):
     """--older takes days, hours or weeks."""
-    parsed = globus_fs.parse_age(text)
+    parsed = walk.parse_age(text)
     expected = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
     assert abs((parsed - expected).total_seconds()) < 5
 
 
 def test_parse_age_accepts_an_iso_date():
     """An absolute date works too."""
-    assert globus_fs.parse_age("2026-01-01").year == 2026
+    assert walk.parse_age("2026-01-01").year == 2026
 
 
 def test_du_rolls_totals_up_into_ancestors(run, capsys):
@@ -182,4 +181,4 @@ def test_ls_recursive_walks_the_tree(run):
 
 def test_mode_string_for_a_symlink():
     """An unreadable permission set degrades rather than raising."""
-    assert ga._mode_string({"type": "file", "permissions": None}).startswith("-?")
+    assert fs._mode_string({"type": "file", "permissions": None}).startswith("-?")

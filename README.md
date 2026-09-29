@@ -1,126 +1,153 @@
-# globus-activity
+# globus-console-cli
 
-A greppable, one-line-per-task view of the Globus web console **Activity**
-tab, plus `ls`, `find` and `du` for collections that are only reachable over
-Globus.
+Two command line tools for a campus Globus subscription, split by who may
+use them:
 
-It calls the same Transfer API the console does, so you see every task on the
-collections where you hold an activity role — not just your own.
+| command | for | needs |
+| --- | --- | --- |
+| **`globus-fs`** | everyone | a Globus login, nothing more |
+| **`globus-console`** | anyone holding an activity role | `activity_monitor` / `activity_manager` on a subscribed collection |
 
-```
-$ globus-activity --errors
-TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES  FLT    AGE  SOURCE               DEST
-0f3a91c2  ACTIVE    PERMISSION_DENIED    user2@umich.edu  0B/s   600/2400  15.0G   14  1h14m  Great Lakes scratch  Turbo Research Storage
-7b1e4d80  INACTIVE  EXPIRED_CREDENTIALS  user3@umich.edu  0B/s   900/3600  22.5G    3  1h51m  Great Lakes scratch  Turbo Research Storage
-```
+**`globus-fs`** gives `ls`, `find` and `du` (with file counts) for storage
+that is only reachable through Globus, plus your own bookmarks and your own
+transfers:
 
 ```
-$ globus-activity du dataden:/umms-mylab -d 1
+$ globus-fs du dataden:/umms-mylab -d 1
   SIZE  FILES  DIRS  PATH
 104.1G      7     4  /umms-mylab
 100.0G      1     1  /umms-mylab/backups
   4.1G      5     1  /umms-mylab/fastq
 ```
 
+**`globus-console`** is a greppable, one-line-per-task view of the Globus
+web console's **Activity** tab — every transfer on the collections you
+monitor, not just your own:
+
+```
+$ globus-console --errors
+TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES  FLT    AGE  SOURCE               DEST
+0f3a91c2  ACTIVE    PERMISSION_DENIED    user2@umich.edu  0B/s   600/2400  15.0G   14  1h14m  Great Lakes scratch  Turbo Research Storage
+7b1e4d80  INACTIVE  EXPIRED_CREDENTIALS  user3@umich.edu  0B/s   900/3600  22.5G    3  1h51m  Great Lakes scratch  Turbo Research Storage
+```
+
 **[USAGE.md](USAGE.md) is the full reference** — every command, every option,
-with examples. This page covers what it is, who can use it, and how to set it
-up.
+with examples. This page covers what the tools are, who can use them, and how
+to set them up.
 
-## Who can use it
+## Who can use which
 
-| | what they see |
-| --- | --- |
-| `activity_monitor` / `activity_manager` on a **subscribed** collection | every task on those collections — the full Activity tab |
-| no activity role | **403 on every admin command**; use `--mine` for their own tasks |
+`globus-console` reads the Transfer API's `endpoint_manager` resources — the
+same calls the web console makes. They are not "your tasks plus more"; they
+are a different API that answers **403 PermissionDenied** to anyone without
+an effective `activity_monitor` or `activity_manager` role on a subscribed
+collection. Those roles are held by:
 
-The admin view is not "your tasks plus more" — it is a different API. A user
-with no activity role gets `PermissionDenied` rather than an empty table, and
-owning a guest collection does **not** by itself grant the role; it has to be
-assigned explicitly, and the collection must be subscribed.
+- subscription and endpoint administrators
+- **the owner of a guest collection, on that collection.** An owner always
+  has an effective `administrator` role, which implies both activity roles,
+  so a researcher who shares data through a guest collection can watch every
+  transfer to and from it
+- anyone granted a role on a collection's **Roles** tab in the web app — a
+  guest collection owner can grant `activity_monitor` to a lab manager
+- anyone with a role on an endpoint or mapped collection, which carries down
+  to the guest collections beneath it
 
-So this is safe to hand to anyone: delegated monitors (a PI or lab data
-steward given `activity_monitor` on their project collection) get exactly
-their collections, and everyone else can still run `--mine`.
+`globus-console endpoints` lists exactly which collections an identity
+covers, and `globus-console login` reports the count.
 
-```
-$ globus-activity --errors
-TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES  FLT    AGE  SOURCE                 DEST
-0f3a91c2  ACTIVE    PERMISSION_DENIED    user2@umich.edu  0B/s   600/2400  15.0G   14  1h14m  Great Lakes scratch    Turbo Research Storage
-7b1e4d80  INACTIVE  EXPIRED_CREDENTIALS  user3@umich.edu  0B/s   900/3600  22.5G    3  1h51m  Great Lakes scratch    Turbo Research Storage
-```
+`globus-fs` needs no role. Listings use your own permissions on each
+collection, bookmarks are yours, and `globus-fs tasks` / `history` read your
+own transfers through `GET /task_list`.
+
+The two tools keep **separate logins** (`~/.globus-fs/` and
+`~/.globus-console/`), so logging out of one leaves the other alone.
 
 ## Setup
 
-### 1. Register a Globus client (once)
+### Install
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install .          # or: pip install -e '.[dev]' to develop
+```
+
+That puts `globus-fs` and `globus-console` in `.venv/bin/`. For a shared
+install, point `pip install --prefix` at your software tree and put its
+`bin/` on `PATH` from a module file.
+
+### Register a Globus client (administrator, once per site)
 
 1. Open <https://app.globus.org/settings/developers>
 2. Choose **Register a thick client or script that will be installed and run by
    users on their devices**
-3. Pick or create a project, name it something like `campus globus-activity`
-4. Copy the **Client UUID**
+3. Pick or create a project and name it after your site
+4. Copy the **Client UUID** and publish it, so users never see this step:
 
-### 2. Log in
-
-```sh
-./globus-activity login --client-id <UUID>
+```lua
+-- Lmod module file
+setenv("GLOBUS_FS_CLIENT_ID",      "<UUID>")
+setenv("GLOBUS_CONSOLE_CLIENT_ID", "<UUID>")
+setenv("GLOBUS_FS_COLLECTIONS",    "/sw/arcts/globus/collections.conf")
 ```
 
-The client ID is saved to `~/.globus-activity/config.json`; refresh tokens go in
-`~/.globus-activity/tokens.json` (mode 0600), so you only log in once.
-
-Put it on your `PATH` if you like:
+### Log in
 
 ```sh
-ln -s "$PWD/globus-activity" ~/bin/globus-activity
+globus-fs login                        # client id from the environment
+globus-fs login --client-id <UUID>     # or saved to ~/.globus-fs/config.json
 ```
+
+Refresh tokens are stored in the tool's directory (mode 0600), so you only
+log in once.
 
 ### Unattended use (cron, dashboards)
 
 Register a **service account / application credential** instead, grant that
-client's identity the `activity_monitor` role on your endpoints, and export:
+client's identity the `activity_monitor` role on your collections, and
+export:
 
 ```sh
-export GLOBUS_ACTIVITY_CLIENT_ID=<UUID>
-export GLOBUS_ACTIVITY_CLIENT_SECRET=<secret>
+export GLOBUS_CONSOLE_CLIENT_ID=<UUID>
+export GLOBUS_CONSOLE_CLIENT_SECRET=<secret>
 ```
 
 No interactive login is needed in that mode.
 
-## What it does
+## What they do
 
 | command | |
 | --- | --- |
-| `globus-activity` / `tasks` | in-progress transfers, one line each |
-| `globus-activity watch` | the same table, refreshed, with a live rate column |
-| `globus-activity history` | completed tasks |
-| `globus-activity task <id>` | one task in full, `--events` for the error log |
-| `globus-activity endpoints` | collections you are allowed to monitor |
-| `globus-activity ls` | list a directory on a collection |
-| `globus-activity find` | recursive search, with size and age filters |
-| `globus-activity du` | sizes and file counts per directory |
-| `globus-activity collections` | site-wide collection shortcuts |
-| `globus-activity bookmark` | your own shortcuts, shared with globus-cli |
-| `globus-activity consent` | unlock a GCS v5 mapped collection for listing |
-| `globus-activity login` / `logout` / `whoami` | credentials |
+| `globus-fs ls` | list a directory on a collection |
+| `globus-fs find` | recursive search, with size and age filters |
+| `globus-fs du` | sizes and file counts per directory |
+| `globus-fs collections` | site-wide collection shortcuts |
+| `globus-fs bookmark` | your own shortcuts, shared with globus-cli |
+| `globus-fs consent` | unlock a GCS v5 mapped collection for listing |
+| `globus-fs tasks` / `watch` / `history` / `task` | your own transfers |
+| `globus-console` / `tasks` | in-progress transfers on collections you monitor |
+| `globus-console watch` | the same table, refreshed, with a live rate column |
+| `globus-console history` | completed tasks |
+| `globus-console task <id>` | one task in full, `--events` for the error log |
+| `globus-console endpoints` | collections you are allowed to monitor |
+| `login` / `logout` / `whoami` | credentials, in both tools |
 
-A few things it is good at:
+A few things they are good at:
 
 ```sh
-globus-activity --errors                      # faulting, paused or stuck
-globus-activity --max-rate 0                  # stalled: no bytes moving
-globus-activity watch -n 5 --errors           # a live problem board
-globus-activity --mine                        # your own transfers, no role needed
-globus-activity find dataden:/lab --older 365d --min-size 1G
-globus-activity du dataden:/lab -d 1
-globus-activity --format json | jq '.[] | select(.faults > 0) | .task_id'
+globus-fs find dataden:/lab --older 365d --min-size 1G
+globus-fs du dataden:/lab -d 1
+globus-fs tasks --errors                     # why is my transfer stuck?
+globus-console --errors                      # faulting, paused or stuck
+globus-console --max-rate 0                  # stalled: no bytes moving
+globus-console watch -n 5 --errors           # a live problem board
+globus-console --format json | jq '.[] | select(.faults > 0) | .task_id'
 ```
 
 Filesystem commands walk the tree with one API call per directory, since the
 Transfer API has no recursive listing. They run a bounded thread pool and
 report progress. Listing is metadata only, so on tape-backed storage `du` and
 `find` read sizes **without recalling anything**.
-
-See [USAGE.md](USAGE.md) for every option.
 
 ## Collection shortcuts
 
@@ -129,8 +156,8 @@ administrator ships a file of `name = uuid` pairs and everyone gets friendly
 names with no per-user setup:
 
 ```sh
-globus-activity ls dataden:/umms-mylab
-globus-activity collections                   # what names exist here
+globus-fs ls dataden:/umms-mylab
+globus-fs collections                   # what names exist here
 ```
 
 ### Format
@@ -155,17 +182,17 @@ Later files win, so a user can override what an administrator ships:
 
 | path | for |
 | --- | --- |
-| `/etc/globus-activity/collections.conf` | everyone on the machine |
-| `$GLOBUS_ACTIVITY_COLLECTIONS` | `:`-separated list of files, for Lmod |
-| `~/.globus-activity/collections.conf` | one user's own additions |
+| `/etc/globus-fs/collections.conf` | everyone on the machine |
+| `$GLOBUS_FS_COLLECTIONS` | `:`-separated list of files, for Lmod |
+| `~/.globus-fs/collections.conf` | one user's own additions |
 
 ```lua
 -- in an Lmod module file
-setenv("GLOBUS_ACTIVITY_COLLECTIONS", "/sw/arcts/globus/collections.conf")
+setenv("GLOBUS_FS_COLLECTIONS", "/sw/arcts/globus/collections.conf")
 ```
 
 Start from [`examples/collections.conf`](examples/collections.conf).
-`globus-activity collections` lists what resolved and which file each name
+`globus-fs collections` lists what resolved and which file each name
 came from. With nothing configured it prints every place it looked -- the
 environment variable included, even when unset -- and points a single user at
 `bookmark create` instead, which is usually what they want.
@@ -175,24 +202,9 @@ A shortcut with a base path behaves like a bookmark — `scratch:mylab` is
 the way user config beats `/etc` everywhere else;
 `collections --check-bookmarks` flags a name being shadowed.
 
-## Requirements / layout
-
-- Python 3.9+ and `globus-sdk` (pinned in `requirements.txt`, installed into
-  `.venv/` here)
-- `globus-activity` — launcher that uses that venv
-- `globus_activity.py` — the whole tool
-
-To rebuild the virtualenv from scratch:
-
-```sh
-rm -rf .venv
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-```
-
 ## Credential security
 
-`~/.globus-activity/tokens.json` holds a Globus **refresh token** — a
+`~/.globus-fs/tokens.json` and `~/.globus-console/tokens.json` hold a Globus **refresh token** — a
 long-lived credential that can be exchanged for access tokens until it is
 revoked. On a shared login node or DTN, a readable token file lets any local
 user act as its owner, and for an activity monitor that means reading every
@@ -205,12 +217,12 @@ on an exposed credential, the way `ssh` refuses an exposed private key:
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 @           WARNING: UNPROTECTED GLOBUS CREDENTIAL FILE!           @
 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-Permissions 0640 for '~/.globus-activity/tokens.json' are too open.
+Permissions 0640 for '~/.globus-fs/tokens.json' are too open.
 ...
 Refusing to run.
 
 Fix it with:
-    chmod 0600 ~/.globus-activity/tokens.json
+    chmod 0600 ~/.globus-fs/tokens.json
 ```
 
 What is enforced, on both the directory and every file in it:
@@ -222,7 +234,7 @@ What is enforced, on both the directory and every file in it:
 | not a symbolic link | a link could redirect the write, or point at a file someone else controls |
 | regular file / real directory | same |
 
-`globus-activity login --fix-permissions` repairs the modes of paths you own,
+`globus-fs login --fix-permissions` (or `globus-console login --fix-permissions` repairs the modes of paths you own,
 instead of refusing. It never changes ownership, so a store owned by someone
 else still fails — as it should.
 
@@ -235,17 +247,35 @@ credential exposed with nothing complaining.
 **Out of scope**, and worth knowing:
 
 - If `~` is on NFS, root on any client can read the token regardless of mode.
-  Consider `GLOBUS_ACTIVITY_HOME` pointing at local disk on shared systems.
-- `GLOBUS_ACTIVITY_CLIENT_SECRET` lives in the environment, so it is visible
+  Consider `GLOBUS_FS_HOME` / `GLOBUS_CONSOLE_HOME` pointing at local disk on shared systems.
+- `GLOBUS_CONSOLE_CLIENT_SECRET` lives in the environment, so it is visible
   in `/proc/<pid>/environ` to you and to root. Prefer a systemd
   `EnvironmentFile` with mode `0600` over exporting it in a shell profile.
 - Revoke a leaked token at <https://app.globus.org/settings/consents>;
   `chmod` alone does not invalidate anything already copied.
 
+## Layout
+
+```
+pyproject.toml                      two console scripts, one package
+src/globus_console_cli/
+    console.py                      globus-console: the Activity view
+    fs.py                           globus-fs: ls/find/du, bookmarks, shortcuts
+    tasks.py                        the task table both tools draw
+    common.py                       login, credential store, formatting
+    security.py                     the credential permission guard
+    shortcuts.py                    collections.conf parsing
+    walk.py                         the parallel directory walker
+```
+
+`tasks.py` is shared because the table is identical; which API fills it is
+fixed by the tool that registers the command, never by a user flag, so
+nothing in `globus-fs` can reach `endpoint_manager`.
+
 ## Development
 
 ```sh
-.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pip install -e '.[dev]'
 pre-commit install
 ```
 
@@ -262,32 +292,33 @@ class, function and method carries a docstring.
 .venv/bin/pytest -k "bookmark or maxdepth"
 ```
 
-149 tests, none of which touch the network or your real credential store —
-`tests/conftest.py` monkeypatches `transfer_client()` and serves a fake
-collection tree.
+None of the tests touch the network or your real credential store —
+`tests/conftest.py` patches `Tool.transfer_client` and serves a fake
+collection tree. `run` drives `globus-fs`, `run_console` drives
+`globus-console`.
 
 | file | covers |
 | --- | --- |
 | `tests/test_security.py` | the credential guard: modes, ownership, symlinks, repair |
 | `tests/test_format.py` | byte/duration formatting, timestamps, the ISSUE column |
-| `tests/test_tasks.py` | sorting, filters, column truncation, admin vs `--mine` |
+| `tests/test_tasks.py` | sorting, filters, truncation, and which API each tool calls |
 | `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
 | `tests/test_bookmarks.py` | bookmark CRUD and target resolution |
 | `tests/test_collections.py` | site shortcut parsing, precedence and resolution |
-| `tests/test_docs.py` | that USAGE.md still documents every option |
+| `tests/test_docs.py` | that USAGE.md documents every option of both tools |
 
 The `du` and `find` tests assert on **how many listings a command makes**,
-since one API call per directory is the cost model users actually feel. And
-`test_docs.py` fails when an option exists in the parser but not in
-[USAGE.md](USAGE.md), so the reference cannot quietly fall behind.
+since one API call per directory is the cost model users actually feel.
+`test_tasks.py` asserts that `globus-fs` only ever calls `task_list` and
+`globus-console` only `endpoint_manager_task_list`.
 
 ## Troubleshooting
 
-- **`Permission denied (PermissionDenied)`** — you do not hold
-  `activity_monitor`/`activity_manager` on a subscribed collection.
-  `globus-activity endpoints` lists what you can actually see;
-  `globus-activity --mine` works regardless of role.
-- **Empty output** — no tasks are running on the endpoints you monitor. Check
-  with `globus-activity --status ACTIVE,INACTIVE,SUCCEEDED,FAILED -e <uuid>`.
-- **`Not authenticated`** — `globus-activity login` (or `login --force` after
-  changing scopes/roles).
+- **`Permission denied (PermissionDenied)` from globus-console** — no
+  activity role on any subscribed collection. `globus-console endpoints`
+  lists what you can see; `globus-fs tasks` shows your own transfers
+  regardless.
+- **Empty output** — no tasks are running on the collections you monitor.
+  Check with `globus-console --status ACTIVE,INACTIVE,SUCCEEDED,FAILED -e <uuid>`.
+- **`Not authenticated`** — `globus-fs login` or `globus-console login`
+  (`--force` after changing scopes or roles).

@@ -1,6 +1,6 @@
 """Permission checks for the on-disk credential store.
 
-``~/.globus-activity/tokens.json`` holds a Globus **refresh token**: a
+``~/.globus-fs/tokens.json`` (and ``~/.globus-console/tokens.json``) holds a Globus **refresh token**: a
 long-lived credential that can be exchanged for access tokens indefinitely
 until it is revoked.  On a shared login node or DTN, a world-readable token
 file lets any local user act as its owner -- and for an activity monitor or
@@ -72,9 +72,10 @@ class InsecureCredentialStore(Exception):
         """
         return self.detail
 
-    def banner(self) -> str:
+    def banner(self, command: str = "globus-fs") -> str:
         """Render an ``ssh``-style refusal suitable for stderr.
 
+        :param command: the tool the user ran, named in the repair hint
         :returns: a multi-line message ending with the command that fixes it
         """
         width = 68
@@ -100,7 +101,7 @@ class InsecureCredentialStore(Exception):
                 f"    chmod {mode:04o} {self.path}",
                 "",
                 "or let this tool repair what it owns:",
-                "    globus-activity login --fix-permissions",
+                f"    {command} login --fix-permissions",
             ]
         return "\n".join(lines)
 
@@ -213,7 +214,7 @@ def secure_directory(path: str, fix: bool = False) -> None:
     ``--fix-permissions`` can repair a directory that would otherwise be
     refused. Without it, an exposed directory raises, as ssh would.
 
-    :param path: the credential directory, e.g. ``~/.globus-activity``
+    :param path: the credential directory, e.g. ``~/.globus-fs``
     :param fix: True to chmod an existing directory rather than refuse it
     :raises InsecureCredentialStore: if the directory is exposed and ``fix``
         is False, or is owned by someone else, or is a symlink

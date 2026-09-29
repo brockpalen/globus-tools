@@ -8,7 +8,7 @@ doc stays honest.
 import argparse
 import pathlib
 
-import globus_activity as ga
+from globus_console_cli import console, fs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 USAGE = (ROOT / "USAGE.md").read_text()
@@ -39,7 +39,11 @@ def _options():
                 if flag.startswith("--"):
                     yield path, flag
 
-    return list(walk(ga.build_parser()))
+    return [
+        (f"{tool.__name__.rsplit('.', 1)[-1]} {cmd}", flag)
+        for tool in (fs, console)
+        for cmd, flag in walk(tool.build_parser())
+    ]
 
 
 def test_every_option_is_documented():
@@ -57,10 +61,10 @@ def test_every_option_is_documented():
 
 
 def test_every_command_is_documented():
-    """Each subcommand has its own section in USAGE.md."""
-    parser = ga.build_parser()
-    for name in parser.command_names:
-        assert f"`{name}`" in USAGE, f"{name} is not documented in USAGE.md"
+    """Each subcommand of both tools is named in USAGE.md."""
+    for tool in (fs, console):
+        for name in tool.build_parser().command_names:
+            assert f"`{name}`" in USAGE, f"{name} is not documented in USAGE.md"
 
 
 def test_readme_documents_the_shortcut_file_format():
@@ -72,27 +76,34 @@ def test_readme_documents_the_shortcut_file_format():
 def test_readme_documents_every_shortcut_source():
     """All three places shortcuts are read from are named in the README."""
     for source in (
-        "/etc/globus-activity/collections.conf",
-        "GLOBUS_ACTIVITY_COLLECTIONS",
-        "~/.globus-activity/collections.conf",
+        "/etc/globus-fs/collections.conf",
+        "GLOBUS_FS_COLLECTIONS",
+        "~/.globus-fs/collections.conf",
     ):
         assert source in README, f"{source} is not in the README"
 
 
 def test_help_summarises_targets_and_shortcuts():
     """--help carries a short version, for people who never open a file."""
-    epilog = ga.MAIN_EPILOG
+    epilog = fs.MAIN_EPILOG
     assert "targets" in epilog
-    assert "GLOBUS_ACTIVITY_COLLECTIONS" in epilog
+    assert "GLOBUS_FS_COLLECTIONS" in epilog
     assert "NAME = COLLECTION_UUID" in epilog
 
 
 def test_collections_help_carries_the_format():
     """`collections --help` is where someone will look for the syntax."""
-    assert "NAME = COLLECTION_UUID" in ga.COLLECTIONS_EPILOG
-    assert "/etc/globus-activity/collections.conf" in ga.COLLECTIONS_EPILOG
+    assert "NAME = COLLECTION_UUID" in fs.COLLECTIONS_EPILOG
+    assert "/etc/globus-fs/collections.conf" in fs.COLLECTIONS_EPILOG
 
 
 def test_readme_points_at_the_reference():
     """A trimmed README must say where the full reference lives."""
     assert "USAGE.md" in README
+
+
+def test_docs_name_both_tools_and_not_the_old_one():
+    """The rename is complete: nothing still says globus-activity."""
+    for doc in (README, USAGE):
+        assert "globus-fs" in doc and "globus-console" in doc
+        assert "globus-activity" not in doc

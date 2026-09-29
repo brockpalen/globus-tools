@@ -10,8 +10,7 @@ import os
 import pytest
 from conftest import COLLECTION
 
-import globus_activity as ga
-import globus_collections as gc
+from globus_console_cli import fs, shortcuts
 
 DATADEN = "ab65757f-00f5-4e5b-aa21-133187732a01"
 
@@ -33,9 +32,9 @@ def clear_bookmark_cache():
 
     :returns: nothing; the cache is cleared before and after
     """
-    ga._BOOKMARK_CACHE = None
+    fs._BOOKMARK_CACHE = None
     yield
-    ga._BOOKMARK_CACHE = None
+    fs._BOOKMARK_CACHE = None
 
 
 @pytest.fixture
@@ -48,9 +47,9 @@ def site(tmp_path, monkeypatch):
     """
     path = tmp_path / "collections.conf"
     path.write_text(SITE_FILE)
-    monkeypatch.setenv(gc.ENV_VAR, str(path))
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent.conf"))
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent.conf"))
+    monkeypatch.setenv(shortcuts.ENV_VAR, str(path))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent.conf"))
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent.conf"))
     return str(path)
 
 
@@ -67,48 +66,48 @@ class Target:
 
 def test_parses_equals_colon_and_bare_forms():
     """Administrators hand-edit this, so be forgiving about separators."""
-    parsed = gc.parse(SITE_FILE)
+    parsed = shortcuts.parse(SITE_FILE)
     assert set(parsed) == {"dataden", "turbo", "locker", "greatlakes"}
     assert parsed["dataden"].collection == DATADEN
 
 
 def test_optional_base_path_is_kept():
     """A shortcut may point at a subdirectory, not just a collection root."""
-    assert gc.parse(SITE_FILE)["greatlakes"].path == "/scratch"
+    assert shortcuts.parse(SITE_FILE)["greatlakes"].path == "/scratch"
 
 
 def test_bare_shortcut_defaults_to_the_root():
     """Without a path, the shortcut is the whole collection."""
-    assert gc.parse(SITE_FILE)["dataden"].path == "/"
+    assert shortcuts.parse(SITE_FILE)["dataden"].path == "/"
 
 
 def test_comments_and_junk_are_skipped():
     """One bad line must not break the file for everyone on the machine."""
-    assert "this" not in gc.parse(SITE_FILE)
+    assert "this" not in shortcuts.parse(SITE_FILE)
 
 
 def test_json_is_accepted_too():
     """A file starting with { is parsed as a JSON object of the same pairs."""
-    parsed = gc.parse('{"dataden": "%s", "turbo": "abc:/nfs/turbo"}' % DATADEN)
+    parsed = shortcuts.parse('{"dataden": "%s", "turbo": "abc:/nfs/turbo"}' % DATADEN)
     assert parsed["dataden"].collection == DATADEN
     assert parsed["turbo"].path == "/nfs/turbo"
 
 
 def test_malformed_json_is_not_fatal():
     """A truncated file yields no shortcuts rather than a traceback."""
-    assert gc.parse('{"dataden": ') == {}
+    assert shortcuts.parse('{"dataden": ') == {}
 
 
 @pytest.mark.parametrize("name", ["with space", "has:colon", "-leading", ""])
 def test_invalid_names_are_rejected(name):
     """Names go on a command line, so no spaces and no colons."""
-    assert not gc.valid_name(name)
+    assert not shortcuts.valid_name(name)
 
 
 @pytest.mark.parametrize("name", ["dataden", "great-lakes", "turbo_2", "a.b+c"])
 def test_valid_names_are_accepted(name):
     """Ordinary friendly names work."""
-    assert gc.valid_name(name)
+    assert shortcuts.valid_name(name)
 
 
 def test_later_files_win(tmp_path, monkeypatch):
@@ -117,9 +116,9 @@ def test_later_files_win(tmp_path, monkeypatch):
     site.write_text("dataden = 11111111-1111-1111-1111-111111111111\n")
     user = tmp_path / "user.conf"
     user.write_text("dataden = 22222222-2222-2222-2222-222222222222\n")
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(site))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    merged = gc.load(str(user))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(site))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    merged = shortcuts.load(str(user))
     assert merged["dataden"].collection.startswith("2222")
 
 
@@ -129,21 +128,21 @@ def test_env_var_takes_several_files(tmp_path, monkeypatch):
     first.write_text("a = 11111111-1111-1111-1111-111111111111\n")
     second = tmp_path / "b.conf"
     second.write_text("b = 22222222-2222-2222-2222-222222222222\n")
-    monkeypatch.setenv(gc.ENV_VAR, os.pathsep.join([str(first), str(second)]))
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    assert set(gc.load()) == {"a", "b"}
+    monkeypatch.setenv(shortcuts.ENV_VAR, os.pathsep.join([str(first), str(second)]))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    assert set(shortcuts.load()) == {"a", "b"}
 
 
 def test_missing_files_are_ignored(monkeypatch, tmp_path):
     """Nothing configured is a normal state, not an error."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    assert gc.load(str(tmp_path / "also-absent")) == {}
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    assert shortcuts.load(str(tmp_path / "also-absent")) == {}
 
 
 def test_shortcut_resolves_as_a_target(site, client):
     """The point of the feature: dataden:/path instead of a UUID."""
-    assert ga._resolve_target(Target("dataden:/lab/x"), client) == (
+    assert fs._resolve_target(Target("dataden:/lab/x"), client) == (
         DATADEN,
         "/lab/x",
     )
@@ -151,12 +150,12 @@ def test_shortcut_resolves_as_a_target(site, client):
 
 def test_bare_shortcut_is_the_collection_root(site, client):
     """A name with no path lists the whole collection."""
-    assert ga._resolve_target(Target("dataden"), client) == (DATADEN, "/")
+    assert fs._resolve_target(Target("dataden"), client) == (DATADEN, "/")
 
 
 def test_shortcut_with_a_base_path_resolves_beneath_it(site, client):
     """greatlakes:proj is proj underneath the configured /scratch."""
-    _, path = ga._resolve_target(Target("greatlakes:proj"), client)
+    _, path = fs._resolve_target(Target("greatlakes:proj"), client)
     assert path == "/scratch/proj"
 
 
@@ -164,8 +163,8 @@ def test_a_personal_bookmark_wins_over_a_shortcut(site, client, tmp_path, monkey
     """User config beats site config, as it does everywhere else."""
     path = tmp_path / "shadow.conf"
     path.write_text(f"projects = {DATADEN}\n")
-    monkeypatch.setenv(gc.ENV_VAR, str(path))
-    collection, resolved = ga._resolve_target(Target("projects"), client)
+    monkeypatch.setenv(shortcuts.ENV_VAR, str(path))
+    collection, resolved = fs._resolve_target(Target("projects"), client)
     assert collection == COLLECTION  # the bookmark's, not the shortcut's
     assert resolved == "/data/"
 
@@ -173,7 +172,7 @@ def test_a_personal_bookmark_wins_over_a_shortcut(site, client, tmp_path, monkey
 def test_unknown_name_lists_shortcuts_and_bookmarks(site, client):
     """A typo should show everything that would have worked."""
     with pytest.raises(SystemExit) as caught:
-        ga._resolve_target(Target("nope"), client)
+        fs._resolve_target(Target("nope"), client)
     message = str(caught.value)
     assert "dataden" in message
     assert "projects" in message
@@ -190,9 +189,9 @@ def test_collections_command_explains_when_none_are_configured(
     run, capsys, monkeypatch, tmp_path
 ):
     """An empty listing should say where to put the file."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
     assert "No collection shortcuts are configured" in out
@@ -203,12 +202,12 @@ def test_empty_state_lists_every_source_including_an_unset_env_var(
     run, capsys, monkeypatch, tmp_path
 ):
     """Showing the variable even when unset explains the mechanism exists."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
-    assert gc.ENV_VAR in out
+    assert shortcuts.ENV_VAR in out
     assert "not set" in out
 
 
@@ -222,9 +221,9 @@ def test_empty_state_shows_no_realistic_looking_shortcut(
     ``du dataden:/path`` and it failed. The template must be obviously a
     template.
     """
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
     assert "<name> = <collection-uuid>" in out
@@ -236,9 +235,9 @@ def test_empty_state_points_at_bookmarks_for_a_single_user(
     run, capsys, monkeypatch, tmp_path
 ):
     """A user wanting one name should be sent to bookmarks, not a config file."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
     run(["collections"])
     assert "bookmark create" in capsys.readouterr().out
 
@@ -247,11 +246,11 @@ def test_unknown_name_says_when_no_shortcuts_are_configured(
     client, monkeypatch, tmp_path
 ):
     """Omitting the line silently leaves the reader guessing why."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
-    monkeypatch.delenv(gc.ENV_VAR, raising=False)
-    monkeypatch.setattr(ga, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
     with pytest.raises(SystemExit) as caught:
-        ga._resolve_target(Target("dataden"), client)
+        fs._resolve_target(Target("dataden"), client)
     message = str(caught.value)
     assert "none configured on this system" in message
     assert "A collection UUID always works" in message
@@ -264,15 +263,15 @@ def test_unknown_name_says_when_you_have_no_bookmarks(site, monkeypatch):
     empty = FakeTransferClient()
     monkeypatch.setattr(empty, "bookmark_list", lambda: [])
     with pytest.raises(SystemExit) as caught:
-        ga._resolve_target(Target("nope"), empty)
+        fs._resolve_target(Target("nope"), empty)
     assert "none yet" in str(caught.value)
 
 
 def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
     """The listing says what each location is for, not just its path."""
-    monkeypatch.setattr(gc, "DEFAULT_SITE_FILE", "/etc/x.conf")
-    monkeypatch.setenv(gc.ENV_VAR, "/from/module.conf")
-    rows = gc.describe_sources("/home/u/.globus-activity/collections.conf")
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", "/etc/x.conf")
+    monkeypatch.setenv(shortcuts.ENV_VAR, "/from/module.conf")
+    rows = shortcuts.describe_sources("/home/u/.globus-fs/collections.conf")
     assert rows[0] == ("/etc/x.conf", "site-wide, shipped by an administrator")
-    assert rows[1][1] == f"from ${gc.ENV_VAR}"
+    assert rows[1][1] == f"from ${shortcuts.ENV_VAR}"
     assert rows[-1][1] == "yours"

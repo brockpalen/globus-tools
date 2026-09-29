@@ -1,8 +1,0 @@
-black
-isort
-flake8
-flake8-bugbear
-bandit
-pytest
-pytest-cov
-pre-commit

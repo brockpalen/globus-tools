@@ -3,7 +3,7 @@
 Most people only ever touch one or two collections, and nobody should have
 to look up a UUID to get at them. An administrator ships a file of
 ``name = uuid`` pairs -- from ``/etc``, or from an Lmod module via
-``GLOBUS_ACTIVITY_COLLECTIONS`` -- and everyone gets ``dataden:/path``
+``GLOBUS_FS_COLLECTIONS`` -- and everyone gets ``dataden:/path``
 without configuring anything.
 
 These sit alongside, not instead of, a user's own Globus bookmarks. A
@@ -39,10 +39,10 @@ __all__ = [
 ]
 
 #: Shipped by an administrator for everyone on the system.
-DEFAULT_SITE_FILE = "/etc/globus-activity/collections.conf"
+DEFAULT_SITE_FILE = "/etc/globus-fs/collections.conf"
 
 #: Colon separated list of extra files, for Lmod and friends.
-ENV_VAR = "GLOBUS_ACTIVITY_COLLECTIONS"
+ENV_VAR = "GLOBUS_FS_COLLECTIONS"
 
 #: Names go on a command line, so no spaces and no colons.
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")

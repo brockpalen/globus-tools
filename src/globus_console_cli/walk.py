@@ -234,6 +234,6 @@ def consent_hint(collection, scopes):
         f"\nThis collection ({collection}) needs an additional consent before "
         "it can be listed.\n"
         "Grant it once with:\n\n"
-        f"    globus-activity consent {collection}\n\n"
+        f"    globus-fs consent {collection}\n\n"
         + (f"(required scopes: {', '.join(scopes)})\n" if scopes else "")
     )

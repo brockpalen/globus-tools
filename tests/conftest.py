@@ -6,16 +6,11 @@ suite touches the network or the real credential store.
 """
 
 import datetime as dt
-import os
-import sys
 
 import globus_sdk
 import pytest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
-
-import globus_activity as ga  # noqa: E402
+from globus_console_cli import common, console, fs
 
 MB = 1000**2
 GB = 1000**3
@@ -187,6 +182,7 @@ class _Paginated:
         """
         self.client = client
         self.last_kwargs = {}
+        self.calls = []
 
     def endpoint_manager_task_list(self, **kwargs):
         """Serve the admin task list.
@@ -195,6 +191,7 @@ class _Paginated:
         :returns: one page of task documents
         """
         self.last_kwargs = kwargs
+        self.calls.append("endpoint_manager_task_list")
         return [self.client.tasks]
 
     def task_list(self, **kwargs):
@@ -204,6 +201,7 @@ class _Paginated:
         :returns: one page of task documents
         """
         self.last_kwargs = kwargs
+        self.calls.append("task_list")
         return [self.client.tasks]
 
 
@@ -251,11 +249,11 @@ def client():
     return FakeTransferClient()
 
 
-@pytest.fixture
-def run(monkeypatch):
-    """Run the CLI against a stub client and capture nothing itself.
+def _runner(monkeypatch, main):
+    """Build a CLI runner that serves a stub Transfer client.
 
     :param monkeypatch: pytest's monkeypatch fixture
+    :param main: the tool's ``main`` function
     :returns: a callable taking ``(argv, client)`` and returning the client
     """
 
@@ -267,8 +265,28 @@ def run(monkeypatch):
         :returns: the client that was used
         """
         transfer = transfer or FakeTransferClient()
-        monkeypatch.setattr(ga, "transfer_client", lambda args: transfer)
-        ga.main(argv)
+        monkeypatch.setattr(common.Tool, "transfer_client", lambda self, args: transfer)
+        main(argv)
         return transfer
 
     return _run
+
+
+@pytest.fixture
+def run(monkeypatch):
+    """Run globus-fs against a stub client.
+
+    :param monkeypatch: pytest's monkeypatch fixture
+    :returns: a callable taking ``(argv, client)`` and returning the client
+    """
+    return _runner(monkeypatch, fs.main)
+
+
+@pytest.fixture
+def run_console(monkeypatch):
+    """Run globus-console against a stub client.
+
+    :param monkeypatch: pytest's monkeypatch fixture
+    :returns: a callable taking ``(argv, client)`` and returning the client
+    """
+    return _runner(monkeypatch, console.main)

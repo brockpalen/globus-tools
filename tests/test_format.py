@@ -4,7 +4,8 @@ import datetime as dt
 
 import pytest
 
-import globus_activity as ga
+from globus_console_cli import common
+from globus_console_cli import tasks as tasklib
 
 
 @pytest.mark.parametrize(
@@ -22,12 +23,12 @@ import globus_activity as ga
 )
 def test_human_bytes(value, expected):
     """Sizes use decimal units, the way transfer rates are quoted."""
-    assert ga.human_bytes(value) == expected
+    assert common.human_bytes(value) == expected
 
 
 def test_human_bytes_suffix():
     """A rate carries its per-second suffix."""
-    assert ga.human_bytes(100 * 1000**2, "/s") == "100.0M/s"
+    assert common.human_bytes(100 * 1000**2, "/s") == "100.0M/s"
 
 
 @pytest.mark.parametrize(
@@ -36,7 +37,7 @@ def test_human_bytes_suffix():
 )
 def test_human_dur(seconds, expected):
     """Durations show the two most significant units."""
-    assert ga.human_dur(seconds) == expected
+    assert common.human_dur(seconds) == expected
 
 
 @pytest.mark.parametrize(
@@ -50,7 +51,7 @@ def test_human_dur(seconds, expected):
 )
 def test_parse_time_accepts_every_form_the_api_returns(value):
     """Space or T separated, with or without a zone, defaulting to UTC."""
-    parsed = ga.parse_time(value)
+    parsed = common.parse_time(value)
     assert parsed.tzinfo is not None
     assert parsed.year == 2026
 
@@ -58,13 +59,13 @@ def test_parse_time_accepts_every_form_the_api_returns(value):
 @pytest.mark.parametrize("value", [None, "", "not a time"])
 def test_parse_time_rejects_junk(value):
     """Unparseable input is None rather than an exception."""
-    assert ga.parse_time(value) is None
+    assert common.parse_time(value) is None
 
 
 def test_age_seconds():
     """Age is measured from now, in seconds."""
     then = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)
-    assert 595 < ga.age_seconds(then.isoformat()) < 605
+    assert 595 < common.age_seconds(then.isoformat()) < 605
 
 
 @pytest.mark.parametrize(
@@ -80,12 +81,15 @@ def test_age_seconds():
 )
 def test_issue_of(task, expected):
     """The ISSUE column is the one operators grep for."""
-    assert ga.issue_of(task) == expected
+    assert tasklib.issue_of(task) == expected
 
 
 def test_paused_beats_nice_status():
     """A paused task reports PAUSED even when it also has a nice_status."""
-    assert ga.issue_of({"is_paused": True, "nice_status": "ENDPOINT_ERROR"}) == "PAUSED"
+    assert (
+        tasklib.issue_of({"is_paused": True, "nice_status": "ENDPOINT_ERROR"})
+        == "PAUSED"
+    )
 
 
 @pytest.mark.parametrize(
@@ -99,4 +103,4 @@ def test_paused_beats_nice_status():
 )
 def test_is_problem(task, expected):
     """--errors selects faulting, paused or badly-statused tasks."""
-    assert ga.is_problem(task) is expected
+    assert tasklib.is_problem(task) is expected

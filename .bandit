@@ -1,2 +1,2 @@
 [bandit]
-exclude = test/*,*/test/*,.venv/*
+exclude = tests/*,./tests/*,.venv/*,./.venv/*
