@@ -38,32 +38,19 @@ SCOPES = {
     ],
 }
 
-REGISTER_HELP = """\
-No Globus client ID configured.
+#: The published "thick client" registration both tools log in through.
+#: Not a secret: a native app's client ID only names the application on the
+#: consent screen, and every user still authenticates as themselves -- the
+#: same reason globus-cli ships its own. Never pair it with a client secret.
+DEFAULT_CLIENT_ID = "6a4a00f5-cded-42a4-a2e9-f535af8fc5b0"
 
-{name} talks to Globus as a registered application. If your site provides
-one, it is usually set for you by a module (module load globus); otherwise
-ask your Globus administrator for the client UUID and run:
+SERVICE_ACCOUNT_HELP = """\
+{env}_CLIENT_SECRET is set but {env}_CLIENT_ID is not.
 
-       {name} login --client-id <UUID>
+A client secret belongs to a service account registration of your own, so
+{name} will not pair it with its built-in client ID. Export both:
 
-Administrators create one once (takes about a minute):
-
-  1. Open https://app.globus.org/settings/developers
-  2. "Register a thick client or script that will be installed and run by
-     users on their devices"
-  3. Pick (or create) a project and name it after your site
-  4. Publish the Client UUID it gives you, e.g. from an Lmod module:
-
-       setenv("{env}_CLIENT_ID", "<UUID>")
-{unattended}"""
-
-UNATTENDED_HELP = """
-For unattended use (cron, dashboards) register a "service account or
-application credential" instead, grant that client's identity the
-activity_monitor role on your collections, and export:
-
-       export {env}_CLIENT_ID=<UUID>
+       export {env}_CLIENT_ID=<service account UUID>
        export {env}_CLIENT_SECRET=<secret>
 """
 
@@ -71,20 +58,18 @@ activity_monitor role on your collections, and export:
 class Tool:
     """One command line tool: its name, credential store and error advice."""
 
-    def __init__(self, name, forbidden_hint="", unattended=False, login_check=None):
+    def __init__(self, name, forbidden_hint="", login_check=None):
         """Describe a tool.
 
         :param name: the command name, e.g. ``"globus-fs"``; it also names
             the config directory and the environment variable prefix
         :param forbidden_hint: advice appended to a 403 from the API
-        :param unattended: True if the tool documents client-secret use
         :param login_check: optional callable ``(tool, app)`` run after a
             successful login to report what the new identity can do
         """
         self.name = name
         self.env = name.upper().replace("-", "_")
         self.forbidden_hint = forbidden_hint
-        self.unattended = unattended
         self.login_check = login_check
 
     # ---- paths ----------------------------------------------------------
@@ -139,28 +124,28 @@ class Tool:
         os.chmod(tmp, 0o600)
         os.replace(tmp, self.config_file)
 
-    def get_client_id(self, override: str | None = None) -> str | None:
+    def get_client_id(self, override: str | None = None) -> str:
         """Resolve the Globus client UUID to authenticate as.
 
         Precedence: explicit argument, then ``$<TOOL>_CLIENT_ID``, then the
-        saved config.
+        saved config, then :data:`DEFAULT_CLIENT_ID`. The built-in default
+        is skipped when a client secret is set, since a secret only makes
+        sense with the service account registration it was issued for.
 
         :param override: a client UUID supplied on the command line
-        :returns: the client UUID, or None if none is configured
+        :returns: the client UUID
+        :raises SystemExit: if a secret is set without its own client UUID
         """
-        return (
+        explicit = (
             override
             or os.environ.get(f"{self.env}_CLIENT_ID")
             or self.load_config().get("client_id")
         )
-
-    def register_help(self) -> str:
-        """Explain how to obtain and configure a client UUID.
-
-        :returns: the message shown when none is configured
-        """
-        unattended = UNATTENDED_HELP.format(env=self.env) if self.unattended else ""
-        return REGISTER_HELP.format(name=self.name, env=self.env, unattended=unattended)
+        if explicit:
+            return explicit
+        if os.environ.get(f"{self.env}_CLIENT_SECRET"):
+            sys.exit(SERVICE_ACCOUNT_HELP.format(name=self.name, env=self.env))
+        return DEFAULT_CLIENT_ID
 
     # ---- auth -----------------------------------------------------------
     def build_app(
@@ -179,8 +164,6 @@ class Tool:
             ``UserApp``
         """
         cid = self.get_client_id(client_id)
-        if not cid:
-            sys.exit(self.register_help())
         try:
             security.secure_directory(self.config_dir, fix=fix_permissions)
             repaired = security.assert_secure(
@@ -251,8 +234,6 @@ class Tool:
         :param args: parsed arguments
         """
         cid = self.get_client_id(args.client_id)
-        if not cid:
-            sys.exit(self.register_help())
         if args.client_id:
             cfg = self.load_config()
             cfg["client_id"] = args.client_id

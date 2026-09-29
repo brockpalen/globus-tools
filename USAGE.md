@@ -267,8 +267,8 @@ as a filter over your own tasks, and `history` does not require it.
 ## `login`, `logout`, `whoami`
 
 ```sh
-globus-fs login                       # client id from $GLOBUS_FS_CLIENT_ID
-globus-fs login --client-id <UUID>    # or saved here, the first time
+globus-fs login                       # uses the built-in client id
+globus-fs login --client-id <UUID>    # a different registration, saved
 globus-fs login --force               # re-run the flow
 globus-fs login --fix-permissions     # repair an exposed token store
 globus-fs whoami
@@ -277,11 +277,13 @@ globus-fs logout
 
 | option | |
 | --- | --- |
-| `--client-id UUID` | the registered Globus client to authenticate as |
+| `--client-id UUID` | authenticate through a different registered client, and save it |
 | `--force` | run the login flow again |
 | `--fix-permissions` | chmod the credential store instead of refusing to run |
 
-Tokens live in `~/.globus-fs/` (override with `$GLOBUS_FS_HOME`). The tool
+The client ID resolves from `--client-id`, then `$GLOBUS_FS_CLIENT_ID`,
+then the saved config, then the built-in default — so normally you pass
+nothing. Tokens live in `~/.globus-fs/` (override with `$GLOBUS_FS_HOME`). The tool
 refuses to run if that directory or the token file inside it is readable by
 other users — see [credential security](README.md#credential-security).
 

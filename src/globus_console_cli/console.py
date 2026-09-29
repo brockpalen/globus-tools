@@ -63,7 +63,6 @@ def _login_check(tool, app):
 TOOL = Tool(
     "globus-console",
     forbidden_hint=FORBIDDEN_HINT,
-    unattended=True,
     login_check=_login_check,
 )
 

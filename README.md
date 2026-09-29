@@ -76,30 +76,32 @@ That puts `globus-fs` and `globus-console` in `.venv/bin/`. For a shared
 install, point `pip install --prefix` at your software tree and put its
 `bin/` on `PATH` from a module file.
 
-### Register a Globus client (administrator, once per site)
-
-1. Open <https://app.globus.org/settings/developers>
-2. Choose **Register a thick client or script that will be installed and run by
-   users on their devices**
-3. Pick or create a project and name it after your site
-4. Copy the **Client UUID** and publish it, so users never see this step:
-
-```lua
--- Lmod module file
-setenv("GLOBUS_FS_CLIENT_ID",      "<UUID>")
-setenv("GLOBUS_CONSOLE_CLIENT_ID", "<UUID>")
-setenv("GLOBUS_FS_COLLECTIONS",    "/sw/arcts/globus/collections.conf")
-```
-
 ### Log in
 
 ```sh
-globus-fs login                        # client id from the environment
-globus-fs login --client-id <UUID>     # or saved to ~/.globus-fs/config.json
+globus-fs login
+globus-console login          # separate login, if you hold an activity role
 ```
 
-Refresh tokens are stored in the tool's directory (mode 0600), so you only
-log in once.
+That is all a user does. Both tools ship a built-in Globus client ID
+(`6a4a00f5-cded-42a4-a2e9-f535af8fc5b0`, a "thick client" registration in
+the site's Globus project), the same way globus-cli and archivetar do. It
+is not a secret: it only names the application on the consent screen, and
+each user still authenticates as themselves. Refresh tokens are stored in
+the tool's directory (mode 0600), so you only log in once.
+
+To use a different registration, highest precedence first:
+`--client-id <UUID>` (saved to the tool's `config.json`), then
+`$GLOBUS_FS_CLIENT_ID` / `$GLOBUS_CONSOLE_CLIENT_ID`, then the saved
+config, then the built-in default. Keep a second administrator on the
+Globus project that owns the registration, so it outlives any one account.
+
+A site module then only needs the shortcuts:
+
+```lua
+-- Lmod module file
+setenv("GLOBUS_FS_COLLECTIONS", "/sw/arcts/globus/collections.conf")
+```
 
 ### Unattended use (cron, dashboards)
 
@@ -112,7 +114,9 @@ export GLOBUS_CONSOLE_CLIENT_ID=<UUID>
 export GLOBUS_CONSOLE_CLIENT_SECRET=<secret>
 ```
 
-No interactive login is needed in that mode.
+No interactive login is needed in that mode. A secret is never paired with
+the built-in client ID: with `GLOBUS_CONSOLE_CLIENT_SECRET` set and no
+client ID of its own, the tool refuses and says so.
 
 ## What they do
 
@@ -300,6 +304,7 @@ collection tree. `run` drives `globus-fs`, `run_console` drives
 | file | covers |
 | --- | --- |
 | `tests/test_security.py` | the credential guard: modes, ownership, symlinks, repair |
+| `tests/test_client_id.py` | client ID precedence and the built-in default |
 | `tests/test_format.py` | byte/duration formatting, timestamps, the ISSUE column |
 | `tests/test_tasks.py` | sorting, filters, truncation, and which API each tool calls |
 | `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
