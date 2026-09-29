@@ -141,6 +141,7 @@ A few things they are good at:
 ```sh
 globus-fs find dataden:/lab --older 365d --min-size 1G
 globus-fs du dataden:/lab -d 1
+globus-fs find dataden:/lab --older 2y --type f --batch > rm.txt   # for globus delete
 globus-fs tasks --errors                     # why is my transfer stuck?
 globus-console --errors                      # faulting, paused or stuck
 globus-console --max-rate 0                  # stalled: no bytes moving
@@ -305,6 +306,7 @@ collection tree. `run` drives `globus-fs`, `run_console` drives
 | --- | --- |
 | `tests/test_security.py` | the credential guard: modes, ownership, symlinks, repair |
 | `tests/test_client_id.py` | client ID precedence and the built-in default |
+| `tests/test_batch.py` | `find --batch` round-trips through globus-cli's batch parser |
 | `tests/test_format.py` | byte/duration formatting, timestamps, the ISSUE column |
 | `tests/test_tasks.py` | sorting, filters, truncation, and which API each tool calls |
 | `tests/test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |

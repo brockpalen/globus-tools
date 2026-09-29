@@ -17,6 +17,7 @@ import fnmatch
 import json
 import os
 import posixpath
+import shlex
 import shutil
 import sys
 import time
@@ -232,6 +233,85 @@ def _entry_matches(args, entry, name, is_dir, min_size, max_size, newer, older):
     return True
 
 
+#: Every character ``str.splitlines()`` breaks on. globus-cli splits
+#: ``--batch`` input with it, so a name holding one cannot be written as a
+#: single line and is left out rather than risk deleting the wrong path.
+_LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def batch_line(path):
+    """Quote one absolute path for ``globus delete --batch`` input.
+
+    globus-cli reads each line with ``shlex.split(line, comments=True)``, so
+    shell quoting round-trips spaces, quotes and ``#`` exactly. Paths are
+    always absolute, which globus-cli leaves untouched by any command-line
+    prefix, and which can never be mistaken for an option.
+
+    :param path: an absolute path on the collection
+    :returns: the quoted line, or None if the path cannot be represented
+    """
+    if any(c in _LINE_BREAKS for c in path):
+        return None
+    return shlex.quote(path)
+
+
+def batch_header(target, collection, type_filter):
+    """The comment block that opens ``find --batch`` output.
+
+    globus-cli skips ``#`` lines, so a saved file carries the collection
+    and the command to submit it, and can be reviewed before anything is
+    deleted.
+
+    :param target: the target as the user typed it
+    :param collection: the resolved collection UUID
+    :param type_filter: the ``--type`` value, ``"f"``, ``"d"`` or None
+    :returns: the header, newline terminated
+    """
+    lines = [
+        f"# Paths from:  globus-fs find {target}",
+        f"# Collection:  {collection}",
+        "# Review, then submit with:",
+        f"#   globus delete --no-enable-globs --batch FILE {collection}",
+    ]
+    if type_filter != "f":
+        lines.append(
+            "# Directories listed here fail without --recursive, which deletes"
+        )
+        lines.append("# everything beneath them. Use --type f to list files only.")
+    return "\n".join(lines) + "\n"
+
+
+def _write_match(args, full, entry, is_dir, end):
+    """Write one find match in the requested output form.
+
+    :param args: parsed arguments, read for ``--long`` and ``--batch``
+    :param full: the match's absolute path
+    :param entry: its listing entry
+    :param is_dir: whether it is a directory
+    :param end: the record terminator
+    :returns: False if the path could not be written, else True
+    """
+    if args.batch:
+        line = batch_line(full)
+        if line is None:
+            print(
+                f"skipped, contains a line break: {full!r}",
+                file=sys.stderr,
+            )
+            return False
+        sys.stdout.write(line + "\n")
+    elif args.long:
+        mtime = (entry.get("last_modified") or "")[:19]
+        kind = "d" if is_dir else "-"
+        sys.stdout.write(
+            f"{kind} {human_bytes(entry.get('size') or 0):>9}  {mtime:19}  "
+            f"{full}{end}"
+        )
+    else:
+        sys.stdout.write(full + end)
+    return True
+
+
 def cmd_find(args):
     """Search a collection recursively and print matching paths.
 
@@ -244,9 +324,14 @@ def cmd_find(args):
     newer = globus_fs.parse_age(args.newer) if args.newer else None
     older = globus_fs.parse_age(args.older) if args.older else None
 
+    if args.batch and (args.long or args.print0):
+        sys.exit("--batch cannot be combined with --long or --print0")
     end = "\0" if args.print0 else "\n"
     count = 0
     total = 0
+    skipped = 0
+    if args.batch:
+        sys.stdout.write(batch_header(args.target, collection, args.type))
     # find's --maxdepth counts *entries* below the start, but the walker
     # counts directories it lists, and a directory's entries are one level
     # deeper than the directory.  --maxdepth 1 therefore means "list only the
@@ -263,17 +348,11 @@ def cmd_find(args):
             ):
                 continue
             full = posixpath.join(path, name)
+            if not _write_match(args, full, e, is_dir, end):
+                skipped += 1
+                continue
             count += 1
             total += e.get("size") or 0
-            if args.long:
-                mtime = (e.get("last_modified") or "")[:19]
-                kind = "d" if is_dir else "-"
-                sys.stdout.write(
-                    f"{kind} {human_bytes(e.get('size') or 0):>9}  {mtime:19}  "
-                    f"{full}{end}"
-                )
-            else:
-                sys.stdout.write(full + end)
             if args.limit and count >= args.limit:
                 sys.stdout.flush()
                 _report_walk_errors(args)
@@ -281,6 +360,11 @@ def cmd_find(args):
     sys.stdout.flush()
     if args.summary:
         print(f"\n{count} match(es), {human_bytes(total)}", file=sys.stderr)
+    if skipped:
+        print(
+            f"{skipped} path(s) with line breaks in the name were left out",
+            file=sys.stderr,
+        )
     _report_walk_errors(args)
 
 
@@ -959,6 +1043,12 @@ def build_parser():
     )
     f.add_argument(
         "-0", "--print0", action="store_true", help="NUL separate for xargs -0"
+    )
+    f.add_argument(
+        "--batch",
+        action="store_true",
+        help="quoted paths for 'globus delete --batch', with a header "
+        "naming the collection",
     )
     f.add_argument("--limit", type=int, default=0, help="stop after N matches")
     f.add_argument("--client-id", help="Globus client UUID")

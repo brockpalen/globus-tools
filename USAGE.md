@@ -144,6 +144,7 @@ globus-fs find dataden:/lab --name '*.tmp' -0 | xargs -0 -n1 echo
 | `--limit N` | stop after N matches |
 | `-l, --long` | show type, size and mtime |
 | `-0, --print0` | NUL separated, for `xargs -0` |
+| `--batch` | quoted paths for `globus delete --batch` — see below |
 | `--summary` | count and total size, to stderr |
 | `-j, --jobs N` | concurrent listings; 8 by default |
 | `--no-hidden`, `--local-user`, `--max-errors` | as for `ls` |
@@ -153,6 +154,43 @@ deterministic — pipe through `sort` if you need it stable.
 
 The size and age filters are the ones `globus ls --filter` cannot express;
 it matches file names only.
+
+### Deleting what `find` matches
+
+globus-fs does not delete anything itself. `--batch` writes the matches in
+the form `globus delete --batch` reads, and globus-cli submits the delete
+task. Write to a file, read it, then submit:
+
+```sh
+globus-fs find dataden:/lab --older 2y --name '*.tmp' --type f --batch > rm.txt
+less rm.txt
+globus delete --no-enable-globs --batch rm.txt <collection-uuid>
+```
+
+The file opens with comment lines naming the collection and giving the exact
+`globus delete` command; globus-cli skips them.
+
+```
+# Paths from:  globus-fs find dataden:/lab
+# Collection:  ab65757f-00f5-4e5b-aa21-133187732a01
+# Review, then submit with:
+#   globus delete --no-enable-globs --batch FILE ab65757f-00f5-4e5b-aa21-133187732a01
+'/lab/run 42/scratch.tmp'
+/lab/old.tmp
+```
+
+- Paths are absolute and shell-quoted, so spaces, quotes, `#`, `*` and
+  leading dashes survive globus-cli's parser exactly. This is tested
+  against globus-cli's own batch reader.
+- A name containing a line break cannot be written as one line. It is left
+  out, and named on stderr, rather than risk deleting a different path.
+- Use `--type f`. A matched directory fails to delete without `--recursive`,
+  and `--recursive` removes everything beneath it, including files the
+  search did not match.
+- `--no-enable-globs` is already globus-cli's default for `delete`; it is
+  spelled out so a literal `*` in a file name can never widen the delete.
+- Piping straight into `globus delete --batch - <uuid>` works too, but
+  skips the review step.
 
 ## `du` — sizes and file counts
 
