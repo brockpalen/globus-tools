@@ -7,7 +7,7 @@ name = "globus-console-cli"
 description = "globus-console (admin Activity view) and globus-fs (ls/find/du) for Globus"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["globus-sdk>=4,<5"]
+dependencies = ["globus-sdk>=4,<5", "humanfriendly>=10"]
 dynamic = ["version"]
 
 [project.optional-dependencies]

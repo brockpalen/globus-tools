@@ -224,6 +224,77 @@ many files" together.
 Listing is metadata only, so on tape-backed storage this reads sizes
 **without recalling anything**.
 
+Symbolic links are listed but never followed, as with local `du`: a link to
+a directory would otherwise count its data twice, or loop.
+
+## `archivescan` — how Data Den friendly is it?
+
+Data Den is built for large files: it provisions 10,000 files per TB, and
+small files belong on a cache such as Locker. `archivescan` counts how much
+of a tree falls either side of a size threshold — the same report as
+archivetar's `archivescan`, for storage reached only through Globus.
+
+```sh
+globus-fs archivescan dataden:/umms-mylab
+globus-fs archivescan turbo:/mylab --size 1G
+globus-fs archivescan turbo:/mylab --filter '*.tar'
+GLOBUS_FS_ARCHIVESCAN_SIZE=10M globus-fs archivescan locker:/mylab
+```
+
+```
+----- Results ------
+Threshold: files larger than 100 MiB
+
+Data Den Candidates:
+Files: 3635
+Size: 394.7 TiB
+
+Cache (Locker) Candidates:
+Files: 11029
+Size: 1.3 TiB
+
+Total Time 2.74 Seconds
+Fraction Offline: 99.66008 %
+```
+
+| option | |
+| --- | --- |
+| `-s, --size SIZE` | files **larger** than this are Data Den candidates; equal or smaller go to cache. Default `100M` |
+| `-f, --filter GLOB` | only count files whose **full path** matches, e.g. `'*.tar'` |
+| `--maxdepth N` | how deep to walk |
+| `--summary` | directories scanned, to stderr |
+| `-j, --jobs N` | concurrent listings; 8 by default |
+| `--no-hidden`, `--local-user`, `--max-errors` | as for `ls` |
+
+**Setting the default size.** `$GLOBUS_FS_ARCHIVESCAN_SIZE` replaces the
+`100M` default, for a site or a module where the migration threshold is
+different; `--size` still wins:
+
+```lua
+-- Lmod module file, for a Data Den tier migrating at 10 MiB
+setenv("GLOBUS_FS_ARCHIVESCAN_SIZE", "10M")
+```
+
+**Sizes use binary units**, parsed by
+[humanfriendly](https://humanfriendly.readthedocs.io/): `100M`, `100MB` and
+`100MiB` are all 104,857,600 bytes, the 100 MiB archivescan has always
+meant. A bare number is bytes.
+
+- **Fraction Offline** is Data Den bytes over all bytes — where the data
+  *would* live, by size. It is not the current migrated state: that needs
+  block counts, which the Globus API does not provide, so archivescan's
+  `--current-state`, `--print-offline` and `--recall` have no equivalent here.
+- Only regular files count. Symbolic links are skipped, and `.snapshot`
+  directories are not walked — a snapshot is another full copy of the tree.
+- `--format tsv` or `csv` prints a header and one row, so a loop builds one
+  table across many directories:
+
+```sh
+for d in lab1 lab2 lab3; do
+  globus-fs archivescan "turbo:/$d" --format tsv --no-header
+done
+```
+
 ## `collections` — site shortcuts
 
 ```sh

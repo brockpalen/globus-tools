@@ -119,12 +119,19 @@ class Walker:
         local_user=None,
         progress=False,
         retries=3,
+        skip_names=(),
     ):
-        """Record a failed directory listing.
+        """Configure a walk.
 
-        :param path: the directory that could not be listed
-        :param code: the API error code
-        :param message: the API error message
+        :param tc: an authenticated Transfer client
+        :param collection: the collection UUID to walk
+        :param jobs: concurrent directory listings
+        :param show_hidden: whether listings include dotfiles
+        :param local_user: local account to map to (GCSv5 mapped collections)
+        :param progress: True to print a running counter on stderr
+        :param retries: attempts after a 429 or 5xx before giving up
+        :param skip_names: directory names never descended into, such as
+            ``.snapshot``; they are still reported in their parent's listing
         """
         self.tc = tc
         self.collection = collection
@@ -133,6 +140,7 @@ class Walker:
         self.local_user = local_user
         self.progress = progress
         self.retries = retries
+        self.skip_names = frozenset(skip_names)
         self.errors = []
         self.dirs_scanned = 0
         self.entries_seen = 0
@@ -204,9 +212,25 @@ class Walker:
                     if maxdepth is not None and depth >= maxdepth:
                         continue
                     for e in entries:
-                        if e.get("type") == "dir":
+                        if self._descends(e):
                             child = posixpath.join(path, e["name"])
                             pending[pool.submit(self._ls, child)] = (child, depth + 1)
+
+    def _descends(self, entry):
+        """Whether the walk should list this entry's contents.
+
+        Symbolic links are never followed, matching ``du`` and ``find``: a
+        link to a directory is reported with ``type`` ``dir`` and a
+        ``link_target``, and following it would double count data or loop.
+
+        :param entry: one listing entry
+        :returns: True for a real directory not named in ``skip_names``
+        """
+        return (
+            entry.get("type") == "dir"
+            and not entry.get("link_target")
+            and entry.get("name") not in self.skip_names
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -124,16 +124,18 @@ class FakeTransferClient:
         key = path if path in TREE else (path.rstrip("/") or "/")
         if key not in TREE:
             raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
+        # "dirlink"/"filelink" model what Globus returns for a symlink: the
+        # target's type, plus a link_target
         return [
             {
                 "name": name,
-                "type": kind,
+                "type": kind.replace("link", ""),
                 "size": size,
                 "last_modified": "2026-09-01 12:00:00+00:00",
                 "permissions": "0755" if kind == "dir" else "0644",
                 "user": "brockp",
                 "group": "hpcstaff",
-                "link_target": None,
+                "link_target": "/elsewhere" if kind.endswith("link") else None,
             }
             for name, kind, size in TREE[key]
         ]

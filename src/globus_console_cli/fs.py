@@ -23,6 +23,7 @@ import sys
 import time
 
 import globus_sdk
+import humanfriendly
 
 from . import shortcuts as globus_collections
 from . import tasks
@@ -153,8 +154,17 @@ def _known_names_hint(tc):
     return "\n".join(lines)
 
 
-def _walk_or_explain(args, tc, collection, path, maxdepth=None):
-    """Walk, turning a ConsentRequired on the first listing into advice."""
+def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
+    """Walk, turning a ConsentRequired on the first listing into advice.
+
+    :param args: parsed arguments, read for the walk options
+    :param tc: an authenticated Transfer client
+    :param collection: the collection UUID
+    :param path: the directory to start from
+    :param maxdepth: how many levels to descend, or None for all
+    :param skip: directory names never descended into
+    :returns: an iterator of ``(path, depth, entries)``
+    """
     walker = globus_fs.Walker(
         tc,
         collection,
@@ -162,6 +172,7 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None):
         show_hidden=not args.no_hidden,
         local_user=getattr(args, "local_user", None),
         progress=sys.stderr.isatty() and args.format == "table",
+        skip_names=skip,
     )
     produced = False
     for item in walker.walk(path, maxdepth=maxdepth):
@@ -643,6 +654,141 @@ def cmd_du(args):
     _report_walk_errors(args)
 
 
+#: Environment variable overriding the archivescan size threshold.
+ARCHIVESCAN_SIZE_VAR = "GLOBUS_FS_ARCHIVESCAN_SIZE"
+
+#: Files larger than this are Data Den candidates. 100 MiB, the same
+#: threshold archivetar's archivescan uses.
+ARCHIVESCAN_DEFAULT_SIZE = "100M"
+
+#: Snapshot directories hold another full copy of the tree; walking them
+#: would multiply the counts, and they are never migrated anyway.
+ARCHIVESCAN_SKIP = (".snapshot",)
+
+
+def archivescan_threshold(text):
+    """Parse a size threshold the way archivetar does.
+
+    Binary units throughout, so ``100M``, ``100MB`` and ``100MiB`` are all
+    104,857,600 bytes -- the 100 MiB archivescan has always meant.
+
+    :param text: a size such as ``"100M"``, ``"1.5G"`` or ``"104857600"``
+    :returns: the threshold in bytes
+    :raises SystemExit: if the size cannot be parsed
+    """
+    try:
+        return humanfriendly.parse_size(text, binary=True)
+    except humanfriendly.InvalidSize as exc:
+        sys.exit(f"archivescan: bad size {text!r}: {exc}")
+
+
+def archivescan_tally(entries, dirpath, threshold, pattern):
+    """Split one directory's files into Data Den and cache candidates.
+
+    Only regular files count. Symbolic links are skipped, as archivescan
+    skips them, since the data they point at is counted where it lives.
+
+    :param entries: the directory's listing entries
+    :param dirpath: the directory's absolute path, for ``--filter``
+    :param threshold: files larger than this many bytes go to Data Den
+    :param pattern: glob matched against each file's full path
+    :returns: ``[big_files, big_bytes, small_files, small_bytes]``
+    """
+    tally = [0, 0, 0, 0]
+    for e in entries:
+        if e.get("type") != "file" or e.get("link_target"):
+            continue
+        if pattern != "*" and not fnmatch.fnmatch(
+            posixpath.join(dirpath, e.get("name", "")), pattern
+        ):
+            continue
+        size = e.get("size") or 0
+        slot = 0 if size > threshold else 2
+        tally[slot] += 1
+        tally[slot + 1] += size
+    return tally
+
+
+def cmd_archivescan(args):
+    """Report how much of a tree is large enough for Data Den.
+
+    A port of archivetar's ``archivescan`` for storage reached only through
+    Globus. It reports the "future state" -- where files would land by
+    size. The current migrated/resident state needs block counts, which the
+    Transfer API does not expose.
+
+    :param args: parsed arguments
+    """
+    threshold = archivescan_threshold(args.size)
+    tc = args.tool.transfer_client(args)
+    collection, root = _resolve_target(args, tc)
+    start = time.time()
+    totals = [0, 0, 0, 0]
+    for path, _depth, entries in _walk_or_explain(
+        args, tc, collection, root, maxdepth=args.maxdepth, skip=ARCHIVESCAN_SKIP
+    ):
+        for i, n in enumerate(archivescan_tally(entries, path, threshold, args.filter)):
+            totals[i] += n
+    elapsed = time.time() - start
+    big_files, big_bytes, small_files, small_bytes = totals
+    all_bytes = big_bytes + small_bytes
+    fraction = 100.0 * big_bytes / all_bytes if all_bytes else None
+
+    row = {
+        "path": root,
+        "threshold_bytes": threshold,
+        "dataden_files": big_files,
+        "dataden_bytes": big_bytes,
+        "cache_files": small_files,
+        "cache_bytes": small_bytes,
+        "fraction_offline": None if fraction is None else round(fraction, 5),
+        "seconds": round(elapsed, 2),
+    }
+    if args.format == "json":
+        json.dump(row, sys.stdout, indent=2)
+        print()
+    elif args.format in ("tsv", "csv"):
+        # one row per scan, so a loop over many directories builds a table
+        writer = csv.writer(
+            sys.stdout,
+            delimiter="\t" if args.format == "tsv" else ",",
+            lineterminator="\n",
+        )
+        if not args.no_header:
+            writer.writerow([k.upper() for k in row])
+        writer.writerow(["" if v is None else v for v in row.values()])
+    else:
+        _print_archivescan(row)
+    walker = getattr(args, "_walker", None)
+    if args.summary and walker:
+        print(f"\n{walker.dirs_scanned} director(ies) scanned", file=sys.stderr)
+    _report_walk_errors(args)
+
+
+def _print_archivescan(row):
+    """Print the report in archivetar's archivescan layout.
+
+    :param row: the scan results, as built by :func:`cmd_archivescan`
+    """
+    size = humanfriendly.format_size
+    print("----- Results ------")
+    print(f"Threshold: files larger than {size(row['threshold_bytes'], binary=True)}")
+    print("")
+    print("Data Den Candidates:")
+    print(f"Files: {row['dataden_files']}")
+    print(f"Size: {size(row['dataden_bytes'], binary=True)}")
+    print("")
+    print("Cache (Locker) Candidates:")
+    print(f"Files: {row['cache_files']}")
+    print(f"Size: {size(row['cache_bytes'], binary=True)}")
+    print("")
+    print(f"Total Time {row['seconds']:.2f} Seconds")
+    if row["fraction_offline"] is None:
+        print("Fraction Offline: n/a (no files)")
+    else:
+        print(f"Fraction Offline: {row['fraction_offline']:.5f} %")
+
+
 def cmd_consent(args):
     """Grant the extra consent a GCS mapped collection needs for listing."""
     app = args.tool.build_app(getattr(args, "client_id", None))
@@ -1070,6 +1216,31 @@ def build_parser():
     )
     add_common(d)
     d.set_defaults(func=cmd_du)
+
+    size_default = os.environ.get(ARCHIVESCAN_SIZE_VAR) or ARCHIVESCAN_DEFAULT_SIZE
+    a = sub.add_parser(
+        "archivescan",
+        help="how Data Den friendly a tree is: files over and under a size",
+    )
+    add_walk_opts(a)
+    a.add_argument(
+        "-s",
+        "--size",
+        default=size_default,
+        metavar="SIZE",
+        help="files larger than this are Data Den candidates, e.g. 100M, 1G; "
+        f"binary units. Default {size_default}, settable with "
+        f"{ARCHIVESCAN_SIZE_VAR}",
+    )
+    a.add_argument(
+        "-f",
+        "--filter",
+        default="*",
+        metavar="GLOB",
+        help="only count files whose full path matches, e.g. '*.tar'",
+    )
+    add_common(a)
+    a.set_defaults(func=cmd_archivescan)
 
     c = sub.add_parser(
         "consent",

@@ -125,6 +125,7 @@ client ID of its own, the tool refuses and says so.
 | `globus-fs ls` | list a directory on a collection |
 | `globus-fs find` | recursive search, with size and age filters |
 | `globus-fs du` | sizes and file counts per directory |
+| `globus-fs archivescan` | how Data Den friendly a tree is: files over and under 100 MiB |
 | `globus-fs collections` | site-wide collection shortcuts |
 | `globus-fs bookmark` | your own shortcuts, shared with globus-cli |
 | `globus-fs consent` | unlock a GCS v5 mapped collection for listing |
@@ -141,6 +142,7 @@ A few things they are good at:
 ```sh
 globus-fs find dataden:/lab --older 365d --min-size 1G
 globus-fs du dataden:/lab -d 1
+globus-fs archivescan turbo:/lab              # ready for Data Den, or tar it first?
 globus-fs find dataden:/lab --older 2y --type f --batch > rm.txt   # for globus delete
 globus-fs tasks --errors                     # why is my transfer stuck?
 globus-console --errors                      # faulting, paused or stuck
@@ -306,6 +308,7 @@ collection tree. `run` drives `globus-fs`, `run_console` drives
 | --- | --- |
 | `tests/test_security.py` | the credential guard: modes, ownership, symlinks, repair |
 | `tests/test_client_id.py` | client ID precedence and the built-in default |
+| `tests/test_archivescan.py` | the size split, env default, snapshot and symlink skipping |
 | `tests/test_batch.py` | `find --batch` round-trips through globus-cli's batch parser |
 | `tests/test_format.py` | byte/duration formatting, timestamps, the ISSUE column |
 | `tests/test_tasks.py` | sorting, filters, truncation, and which API each tool calls |
