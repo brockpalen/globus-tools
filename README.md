@@ -72,11 +72,11 @@ The two tools keep **separate logins** (`~/.globus-fs/` and
 has to put two commands on `PATH`, and nothing in a user's Python
 environment can break it.
 
-For development, or a single-user install:
+For development, or a single-user install, with
+[uv](https://docs.astral.sh/uv/):
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
+uv sync                  # .venv with the locked dependencies and dev tools
 ```
 
 ### Log in
@@ -268,9 +268,8 @@ credential exposed with nothing complaining.
 
 ```
 pyproject.toml                      two console scripts, one package
-requirements.txt                    hash-locked dependencies (generated)
+uv.lock                             hash-locked dependencies (generated)
 packaging/build-standalone.sh       self-contained install, see INSTALL.md
-packaging/update-lock.sh            regenerates requirements.txt
 packaging/globus-fs.lua             example Lmod modulefile
 src/globus_console_cli/
     console.py                      globus-console: the Activity view
@@ -289,9 +288,12 @@ nothing in `globus-fs` can reach `endpoint_manager`.
 ## Development
 
 ```sh
-.venv/bin/pip install -e '.[dev]'
-pre-commit install
+uv sync                  # like `pipenv install --dev`, from uv.lock
+.venv/bin/pre-commit install
 ```
+
+Dependencies are locked in `uv.lock`; to update them, the `pipenv update`
+loop, see [INSTALL.md](INSTALL.md#updating-dependencies).
 
 `tox.ini` carries the flake8, isort and pytest settings and `.bandit` the
 bandit exclusions, matching archivetar and ltfsee-globus. Every module,

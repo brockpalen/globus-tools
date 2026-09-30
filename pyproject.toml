@@ -10,7 +10,9 @@ requires-python = ">=3.9"
 dependencies = ["globus-sdk>=4,<5", "humanfriendly>=10"]
 dynamic = ["version"]
 
-[project.optional-dependencies]
+# Development tools, installed by `uv sync` and never into the standalone
+# build. (A PEP 735 dependency group: pip 25.1+ reads it with --group dev.)
+[dependency-groups]
 dev = [
     "black",
     "isort",
@@ -20,6 +22,7 @@ dev = [
     "pytest",
     "pytest-cov",
     "pre-commit",
+    "uv>=0.12.21",
 ]
 
 [project.scripts]

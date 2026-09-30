@@ -4,8 +4,9 @@
 #   packaging/build-standalone.sh PREFIX
 #
 # PREFIX gets its own Python (a relocatable python-build-standalone
-# interpreter, fetched by uv) with every dependency installed into it from
-# the hashed requirements.txt, and a bin/ holding only the two commands.
+# interpreter, fetched by uv) with every dependency installed into it at
+# the versions and hashes in uv.lock, and a bin/ holding only the two
+# commands.
 # Nothing is read from the user's Python, PYTHONPATH, ~/.local or modules,
 # so an Lmod module need only prepend PREFIX/bin to PATH.
 #
@@ -60,15 +61,20 @@ done
 mv "$interp" "$PREFIX/python"
 py="$PREFIX/python/bin/python3"
 
-# 2. Dependencies, exactly as locked, restricted to wheels that run on the
-#    target glibc -- not whatever this build host happens to support.
+# 2. Dependencies, exactly as locked in uv.lock. --locked refuses to build
+#    if the lock no longer matches pyproject.toml, rather than quietly
+#    resolving something new. The install is restricted to wheels that run
+#    on the target glibc -- not whatever this build host supports.
 #    --break-system-packages: this interpreter belongs to this install.
 #    --compile-bytecode: the tree will be read-only, so Python could never
 #    cache .pyc files itself and every run would recompile.
 platform="${ARCH}-manylinux_$(echo "$GLIBC" | tr . _)"
+uv export --project "$root" --locked --no-dev --no-emit-project \
+    --format requirements-txt --no-header --quiet \
+    -o "$stage/requirements.txt"
 uv pip install --python "$py" --break-system-packages --quiet \
     --python-platform "$platform" --require-hashes --compile-bytecode \
-    -r "$root/requirements.txt"
+    -r "$stage/requirements.txt"
 uv pip install --python "$py" --break-system-packages --quiet \
     --python-platform "$platform" --no-deps --compile-bytecode \
     "$root"

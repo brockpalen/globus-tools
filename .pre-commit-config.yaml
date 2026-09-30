@@ -1,9 +1,18 @@
 # Local hooks, matching the style used in archivetar and ltfsee-globus.
 # Those projects run the tools through `pipenv run`; this one keeps its
-# dev tools in .venv, so the entries point there instead.
+# dev tools in .venv (made by `uv sync`), so the entries point there.
 repos:
   - repo: local
     hooks:
+      # the uv equivalent of pipenv refusing a stale Pipfile.lock
+      - id: uv-lock
+        name: uv.lock matches pyproject.toml
+        stages: [commit]
+        language: system
+        entry: .venv/bin/uv lock --check
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+
       - id: isort
         name: isort
         stages: [commit]

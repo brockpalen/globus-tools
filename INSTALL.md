@@ -42,9 +42,11 @@ A build takes a few seconds and about 135 MB.
   [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
   CPython, fetched by `uv`. It needs only glibc 2.17 and nothing from the
   system Python.
-- **Locked dependencies.** Installed from [`requirements.txt`](requirements.txt),
-  which pins every package *and its hash*: a rebuild gets byte-identical
-  dependencies, or fails.
+- **Locked dependencies.** Installed at the versions and hashes in
+  [`uv.lock`](uv.lock): every site building the same commit gets the same,
+  tested dependencies, and a build fails rather than quietly resolving
+  something new. The lock covers every platform and Python version, so an
+  aarch64 or older-glibc build uses it too.
 - **Isolated launchers.** `bin/globus-fs` is a two-line shell script that
   runs the bundled Python with `-I` (isolated mode). `PYTHONPATH`,
   `PYTHONHOME`, `~/.local` packages and any loaded Python module are all
@@ -82,22 +84,37 @@ find /sw/pkgs/arc/globus-fs/0.2.0 -name '*.so*' -type f \
   | xargs -n1 objdump -T 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
 ```
 
-If you change `GLIBC` or `PYTHON_VERSION`, regenerate the lock to match (see
-below).
+Changing `GLIBC`, `PYTHON_VERSION` or `ARCH` needs no change to the lock.
+If no locked version of a package has a wheel for the target, the install
+stops with an error naming it.
 
 ## Updating dependencies
 
-`requirements.txt` is generated; do not edit it by hand.
+The same loop as `pipenv update`: move the lock, test, commit. `uv.lock` is
+generated; do not edit it by hand.
 
 ```sh
-# after changing dependencies in pyproject.toml, or to take upstream fixes
-packaging/update-lock.sh
-git diff requirements.txt        # review what moved
-git commit requirements.txt
+uv lock --upgrade                    # everything to the newest allowed
+uv lock --upgrade-package requests   # or just one package
+uv sync                              # make .venv match the new lock
+uv run pytest                        # test against it
+git diff --stat uv.lock              # review what moved
+git commit uv.lock
 ```
 
-`update-lock.sh` honours the same `GLIBC`, `PYTHON_VERSION` and `ARCH`
-variables as the build.
+After adding or changing a dependency in `pyproject.toml`, run `uv lock`
+(or `uv add <package>`, which edits both). A pre-commit hook runs
+`uv lock --check` and refuses a commit whose lock no longer matches
+`pyproject.toml`.
+
+| pipenv | uv |
+| --- | --- |
+| `pipenv install --dev` | `uv sync` |
+| `pipenv update` | `uv lock --upgrade && uv sync` |
+| `pipenv update requests` | `uv lock --upgrade-package requests && uv sync` |
+| `pipenv install requests` | `uv add requests` |
+| `pipenv run pytest` | `uv run pytest` |
+| `Pipfile.lock` | `uv.lock` |
 
 ## Releasing a new version
 
