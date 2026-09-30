@@ -270,7 +270,6 @@ credential exposed with nothing complaining.
 pyproject.toml                      two console scripts, one package
 uv.lock                             hash-locked dependencies (generated)
 packaging/build-standalone.sh       self-contained install, see INSTALL.md
-packaging/globus-fs.lua             example Lmod modulefile
 src/globus_console_cli/
     console.py                      globus-console: the Activity view
     fs.py                           globus-fs: ls/find/du, bookmarks, shortcuts
