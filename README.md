@@ -67,14 +67,17 @@ The two tools keep **separate logins** (`~/.globus-fs/` and
 
 ### Install
 
+**For users on a cluster, build the standalone install: see
+[INSTALL.md](INSTALL.md).** It bundles its own Python, so an Lmod module only
+has to put two commands on `PATH`, and nothing in a user's Python
+environment can break it.
+
+For development, or a single-user install:
+
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install .          # or: pip install -e '.[dev]' to develop
+.venv/bin/pip install -e '.[dev]'
 ```
-
-That puts `globus-fs` and `globus-console` in `.venv/bin/`. For a shared
-install, point `pip install --prefix` at your software tree and put its
-`bin/` on `PATH` from a module file.
 
 ### Log in
 
@@ -265,6 +268,10 @@ credential exposed with nothing complaining.
 
 ```
 pyproject.toml                      two console scripts, one package
+requirements.txt                    hash-locked dependencies (generated)
+packaging/build-standalone.sh       self-contained install, see INSTALL.md
+packaging/update-lock.sh            regenerates requirements.txt
+packaging/globus-fs.lua             example Lmod modulefile
 src/globus_console_cli/
     console.py                      globus-console: the Activity view
     fs.py                           globus-fs: ls/find/du, bookmarks, shortcuts
