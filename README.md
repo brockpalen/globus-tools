@@ -1,5 +1,7 @@
 # globus-tools
 
+[![checks](https://github.com/brockpalen/globus-tools/actions/workflows/checks.yml/badge.svg)](https://github.com/brockpalen/globus-tools/actions/workflows/checks.yml)
+
 Two command line tools for Globus. Community tools, not an official Globus
 product.
 

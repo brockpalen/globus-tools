@@ -2,9 +2,15 @@
 
 ```sh
 uv sync                          # .venv from uv.lock, with dev tools
-.venv/bin/pre-commit install     # isort, black, flake8, bandit, pytest, lock check
+.venv/bin/pre-commit install     # run the checks on every commit
 .venv/bin/pytest                 # with coverage, per tox.ini
 ```
+
+Every commit runs isort, black, flake8, bandit, pytest and a `uv.lock`
+check (`.pre-commit-config.yaml`). GitHub runs the same hooks, plus the
+tests on Python 3.9 and 3.13, for every push and pull request
+(`.github/workflows/checks.yml`), so a commit made without the hooks is
+still caught.
 
 `tox.ini` holds the flake8, isort and pytest settings and `.bandit` the
 bandit exclusions, matching archivetar. Every module, class, function and

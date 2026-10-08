@@ -1,0 +1,41 @@
+# The same checks as the pre-commit hooks, run for every push and pull
+# request, so nothing depends on a contributor having run
+# `pre-commit install` (or not using --no-verify).
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# read-only: these jobs only check code
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: isort, black, flake8, bandit, pytest, lock
+    runs-on: ubuntu-latest
+    steps:
+      # third-party actions are pinned to a commit, not a movable tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - run: uv sync --locked
+      - run: uv run --locked pre-commit run --all-files --show-diff-on-failure
+
+  tests:
+    name: pytest on Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # oldest supported (pyproject requires-python) and newest
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - run: uv run --locked --python ${{ matrix.python }} pytest -q --no-cov
