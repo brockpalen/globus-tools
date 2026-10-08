@@ -74,10 +74,11 @@ def test_readme_documents_the_shortcut_file_format():
 
 
 def test_readme_documents_every_shortcut_source():
-    """All three places shortcuts are read from are named in the README."""
+    """Every place shortcuts are read from are named in the README."""
     for source in (
         "/etc/globus-fs/collections.conf",
         "GLOBUS_FS_COLLECTIONS",
+        "GLOBUS_FS_SHORTCUTS",
         "~/.globus/app/<client-id>/globus-fs/collections.conf",
     ):
         assert source in README, f"{source} is not in the README"
@@ -88,6 +89,7 @@ def test_help_summarises_targets_and_shortcuts():
     epilog = fs.MAIN_EPILOG
     assert "targets" in epilog
     assert "GLOBUS_FS_COLLECTIONS" in epilog
+    assert "GLOBUS_FS_SHORTCUTS" in epilog
     assert "NAME = COLLECTION_UUID" in epilog
 
 

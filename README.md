@@ -90,13 +90,21 @@ dataden = ab65757f-00f5-4e5b-aa21-133187732a01
 scratch = 1a2b3c4d-0000-0000-0000-000000000000:/scratch
 ```
 
-Read from, later files winning:
+Read from, later sources winning:
 
 | file | for |
 | --- | --- |
 | `/etc/globus-fs/collections.conf` | everyone on the machine |
 | `$GLOBUS_FS_COLLECTIONS` | `:`-separated files, e.g. set by an Lmod module |
+| `$GLOBUS_FS_SHORTCUTS` | the shortcuts themselves, `;`-separated, so a module needs no file |
 | `~/.globus/app/<client-id>/globus-fs/collections.conf` | one user's own |
+
+In an Lmod module, one line per shortcut; unloading removes just those:
+
+```lua
+append_path("GLOBUS_FS_SHORTCUTS", "dataden=ab65757f-00f5-4e5b-aa21-133187732a01", ";")
+append_path("GLOBUS_FS_SHORTCUTS", "scratch=1a2b3c4d-0000-0000-0000-000000000000:/scratch", ";")
+```
 
 `#` starts a comment; `NAME: UUID` and `NAME UUID` also work; a malformed
 line is skipped. Names have no spaces or colons. A personal Globus bookmark

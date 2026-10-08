@@ -1024,6 +1024,7 @@ collection shortcuts        (see: globus-fs collections)
   read from, later winning:
     /etc/globus-fs/collections.conf
     $GLOBUS_FS_COLLECTIONS      colon separated files, for Lmod
+    $GLOBUS_FS_SHORTCUTS        the shortcuts themselves, ; separated
     ~/.globus/app/<client-id>/globus-fs/collections.conf
   format:
     NAME = COLLECTION_UUID[:/base/path]       # also NAME: UUID, or NAME UUID
@@ -1042,6 +1043,8 @@ administrator ships them for everyone; a user can add their own.
 read from, later winning:
   /etc/globus-fs/collections.conf     everyone on this machine
   $GLOBUS_FS_COLLECTIONS              colon separated files, for Lmod
+  $GLOBUS_FS_SHORTCUTS                the shortcuts themselves, for Lmod:
+                                        dataden=UUID;scratch=UUID:/scratch
   ~/.globus/app/<client-id>/globus-fs/collections.conf
                                             your own additions, beside your tokens
 

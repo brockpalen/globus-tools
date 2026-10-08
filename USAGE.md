@@ -43,8 +43,8 @@ shortcut**. A UUID is always taken literally.
 
 ## Collection shortcuts
 
-Names such as `dataden` come from your Globus bookmarks and from
-`collections.conf` files; the file format and where they are read from are
+Names such as `dataden` come from your Globus bookmarks, from
+`collections.conf` files and from `$GLOBUS_FS_SHORTCUTS`; the format and where they are read from are
 in the [README](README.md#collection-shortcuts). `globus-fs collections`
 lists what is configured here.
 

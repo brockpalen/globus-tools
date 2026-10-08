@@ -37,6 +37,15 @@ def clear_bookmark_cache():
     fs._BOOKMARK_CACHE = None
 
 
+@pytest.fixture(autouse=True)
+def no_shortcuts_in_environment(monkeypatch):
+    """Keep a developer's own GLOBUS_FS_SHORTCUTS out of these tests.
+
+    :param monkeypatch: pytest's monkeypatch fixture
+    """
+    monkeypatch.delenv(shortcuts.SHORTCUTS_VAR, raising=False)
+
+
 @pytest.fixture
 def site(tmp_path, monkeypatch):
     """Install a site shortcuts file via the environment variable.
@@ -135,6 +144,53 @@ def test_env_var_takes_several_files(tmp_path, monkeypatch):
     assert set(shortcuts.load()) == {"a", "b"}
 
 
+def test_shortcuts_variable_holds_the_shortcuts_themselves(tmp_path, monkeypatch):
+    """A module can carry its shortcuts without shipping a file."""
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setenv(
+        shortcuts.SHORTCUTS_VAR,
+        f"dataden={DATADEN};great-lakes = 5f6e7d8c-0000-0000-0000-000000000000:/scratch",
+    )
+    merged = shortcuts.load()
+    assert merged["dataden"].collection == DATADEN
+    assert merged["dataden"].path == "/"
+    assert merged["great-lakes"].path == "/scratch"
+    assert merged["dataden"].source == f"${shortcuts.SHORTCUTS_VAR}"
+
+
+def test_shortcuts_variable_tolerates_empty_and_bad_entries(monkeypatch):
+    """Lmod can leave stray separators; one bad entry must not break the rest."""
+    monkeypatch.setenv(shortcuts.SHORTCUTS_VAR, f";;dataden={DATADEN};not a shortcut;")
+    assert set(shortcuts.from_environment()) == {"dataden"}
+
+
+def test_shortcuts_variable_accepts_newlines(monkeypatch):
+    """A multi-line value set from a shell script works the same way."""
+    monkeypatch.setenv(shortcuts.SHORTCUTS_VAR, f"dataden={DATADEN}\nturbo=abc:/nfs")
+    assert set(shortcuts.from_environment()) == {"dataden", "turbo"}
+
+
+def test_shortcuts_variable_precedence(tmp_path, monkeypatch):
+    """Above the site and module files, below the user's own file."""
+    site = tmp_path / "site.conf"
+    site.write_text("a = site\nb = site\n")
+    module = tmp_path / "module.conf"
+    module.write_text("b = module\nc = module\n")
+    user = tmp_path / "user.conf"
+    user.write_text("d = user\n")
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(site))
+    monkeypatch.setenv(shortcuts.ENV_VAR, str(module))
+    monkeypatch.setenv(shortcuts.SHORTCUTS_VAR, "c=env;d=env")
+    merged = shortcuts.load(str(user))
+    assert {name: s.collection for name, s in merged.items()} == {
+        "a": "site",
+        "b": "module",
+        "c": "env",
+        "d": "user",
+    }
+
+
 def test_missing_files_are_ignored(monkeypatch, tmp_path):
     """Nothing configured is a normal state, not an error."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
@@ -210,6 +266,7 @@ def test_empty_state_lists_every_source_including_an_unset_env_var(
     run(["collections"])
     out = capsys.readouterr().out
     assert shortcuts.ENV_VAR in out
+    assert shortcuts.SHORTCUTS_VAR in out
     assert "not set" in out
 
 
@@ -269,6 +326,19 @@ def test_unknown_name_says_when_you_have_no_bookmarks(site, monkeypatch):
     assert "none yet" in str(caught.value)
 
 
+def test_collections_command_lists_shortcuts_from_the_environment(
+    run, capsys, monkeypatch, tmp_path
+):
+    """The SOURCE column names the variable, so people know where to look."""
+    monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
+    monkeypatch.setenv(shortcuts.SHORTCUTS_VAR, f"dataden={DATADEN}")
+    run(["collections"])
+    out = capsys.readouterr().out
+    assert DATADEN in out and f"${shortcuts.SHORTCUTS_VAR}" in out
+
+
 def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
     """The listing says what each location is for, not just its path."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", "/etc/x.conf")
@@ -278,6 +348,7 @@ def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
     )
     assert rows[0] == ("/etc/x.conf", "site-wide, shipped by an administrator")
     assert rows[1][1] == f"from ${shortcuts.ENV_VAR}"
+    assert rows[2] == (f"${shortcuts.SHORTCUTS_VAR}", "not set")
     assert rows[-1][1] == "yours"
 
 

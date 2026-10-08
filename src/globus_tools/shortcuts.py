@@ -3,8 +3,9 @@
 Most people only ever touch one or two collections, and nobody should have
 to look up a UUID to get at them. An administrator ships a file of
 ``name = uuid`` pairs -- from ``/etc``, or from an Lmod module via
-``GLOBUS_FS_COLLECTIONS`` -- and everyone gets ``dataden:/path``
-without configuring anything.
+``GLOBUS_FS_COLLECTIONS`` (files) or ``GLOBUS_FS_SHORTCUTS`` (the pairs
+themselves) -- and everyone gets ``dataden:/path`` without configuring
+anything.
 
 These sit alongside, not instead of, a user's own Globus bookmarks. A
 bookmark of the same name wins, because it is that person's explicit choice.
@@ -18,7 +19,8 @@ File format, deliberately dull because administrators hand-edit it::
 
 ``name: uuid`` and bare ``name uuid`` are accepted too, ``#`` starts a
 comment, and a file beginning with ``{`` is parsed as a JSON object of the
-same pairs. A name may carry an optional ``:/base/path``; paths given on the
+same pairs. ``GLOBUS_FS_SHORTCUTS`` holds the same lines separated by
+``;``, so a module can carry its shortcuts without a file. A name may carry an optional ``:/base/path``; paths given on the
 command line are resolved beneath it, exactly as they are for a bookmark.
 """
 
@@ -31,6 +33,7 @@ import re
 __all__ = [
     "DEFAULT_SITE_FILE",
     "describe_sources",
+    "from_environment",
     "Shortcut",
     "load",
     "parse",
@@ -43,6 +46,10 @@ DEFAULT_SITE_FILE = "/etc/globus-fs/collections.conf"
 
 #: Colon separated list of extra files, for Lmod and friends.
 ENV_VAR = "GLOBUS_FS_COLLECTIONS"
+
+#: The shortcuts themselves, ``;`` separated, also for Lmod. Not ``:``,
+#: which already separates a collection from its base path.
+SHORTCUTS_VAR = "GLOBUS_FS_SHORTCUTS"
 
 #: Names go on a command line, so no spaces and no colons.
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
@@ -139,6 +146,18 @@ def parse(text: str, source: str = "<string>") -> dict[str, Shortcut]:
     return shortcuts
 
 
+def from_environment() -> dict[str, Shortcut]:
+    """Parse the shortcuts held in ``GLOBUS_FS_SHORTCUTS``.
+
+    Each ``;`` (or newline) separated entry is one line of the file format,
+    e.g. ``dataden=UUID;scratch=UUID:/scratch``.
+
+    :returns: mapping of name to :class:`Shortcut`, empty when unset
+    """
+    text = os.environ.get(SHORTCUTS_VAR, "")
+    return parse(text.replace(";", "\n"), source=f"${SHORTCUTS_VAR}")
+
+
 def search_paths(user_file: str | None = None) -> list[str]:
     """List the shortcut files to read, in increasing precedence.
 
@@ -173,23 +192,42 @@ def describe_sources(user_file: str | None = None) -> list[tuple[str, str]]:
                 rows.append((path, f"from ${ENV_VAR}"))
     else:
         rows.append((f"${ENV_VAR}", "not set"))
+    if os.environ.get(SHORTCUTS_VAR, ""):
+        rows.append((f"${SHORTCUTS_VAR}", "shortcuts set in the environment"))
+    else:
+        rows.append((f"${SHORTCUTS_VAR}", "not set"))
     if user_file:
         rows.append((user_file, "yours"))
     return rows
 
 
 def load(user_file: str | None = None) -> dict[str, Shortcut]:
-    """Read every shortcut file that exists and merge them.
+    """Read every shortcut source and merge them.
+
+    In increasing precedence: the site file, ``GLOBUS_FS_COLLECTIONS``
+    files, ``GLOBUS_FS_SHORTCUTS``, then the user's own file.
 
     :param user_file: the per-user file, typically in the config directory
-    :returns: mapping of name to :class:`Shortcut`, later files winning
+    :returns: mapping of name to :class:`Shortcut`, later sources winning
     """
     merged: dict[str, Shortcut] = {}
-    for path in search_paths(user_file):
-        try:
-            with open(path, encoding="utf-8") as handle:
-                text = handle.read()
-        except OSError:
-            continue
-        merged.update(parse(text, source=path))
+    for path in search_paths():
+        merged.update(_read(path))
+    merged.update(from_environment())
+    if user_file:
+        merged.update(_read(user_file))
     return merged
+
+
+def _read(path: str) -> dict[str, Shortcut]:
+    """Parse one shortcut file, treating a missing or unreadable one as empty.
+
+    :param path: the file to read
+    :returns: mapping of name to :class:`Shortcut`
+    """
+    try:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return {}
+    return parse(text, source=path)
