@@ -188,3 +188,23 @@ def test_find_without_a_terminal_explains_how_to_log_in(run, capsys, monkeypatch
         run(["find", f"{COLLECTION}:/raeker2"], client)
     assert exc.value.code == 1
     assert "interactive terminal" in capsys.readouterr().err
+
+
+def test_relogin_forces_a_fresh_sign_in(tool):
+    """prompt=login, as globus-cli: an old browser session must not count.
+
+    The real failure: umich.edu had signed in 11 hours earlier, Globus
+    accepted that session without asking, and the collection refused it.
+    """
+    tool.call(failing_once(ha_session_error()))
+    (params,) = tool.app.logins
+    assert params.prompt == "login"
+    assert params.session_required_single_domain == ["umich.edu"]
+
+
+def test_refused_after_login_names_the_identity_to_use(tool, capsys):
+    """In a terminal, 'run it in a terminal' is the wrong advice."""
+    with pytest.raises(SystemExit) as exc:
+        tool.api_error(ha_session_error())
+    assert "umich.edu" in str(exc.value)
+    assert "interactive terminal" not in str(exc.value)

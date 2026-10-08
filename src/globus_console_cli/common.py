@@ -280,12 +280,18 @@ class Tool:
         gare = _to_gare(error)
         if gare is None or not sys.stdin.isatty():
             return False
+        params = gare.authorization_parameters
+        # Always sign in afresh, as globus-cli does. Without this, a browser
+        # that already has a session with the required identity is accepted
+        # as is -- and a high assurance collection rejects it again when
+        # that sign-in is older than its timeout (seen: umich.edu signed in
+        # 11 hours earlier, so the login "succeeded" and the retry failed).
+        params.prompt = "login"
         with self._login_lock:
             if self._logins == seen:
-                message = gare.authorization_parameters.session_message
-                if message:
-                    print(f"\n{message}", file=sys.stderr)
-                self.app.login(auth_params=gare.authorization_parameters)
+                if params.session_message:
+                    print(f"\n{params.session_message}", file=sys.stderr)
+                self.app.login(auth_params=params)
                 self._logins += 1
         return True
 
@@ -311,13 +317,9 @@ class Tool:
         :param e: the API error to explain
         :raises SystemExit: always
         """
-        if _is_gare(e):
-            sys.exit(
-                f"{e.code}: {e.message}\n\n"
-                "This needs you to log in again, or to consent to a collection.\n"
-                f"Run the same {self.name} command in an interactive terminal and "
-                "it will ask you to log in."
-            )
+        gare = _to_gare(e)
+        if gare is not None:
+            sys.exit(f"{e.code}: {e.message}\n\n" + self._login_advice(gare))
         if e.http_status == 403:
             sys.exit(f"Permission denied ({e.code}): {e.message}{self.forbidden_hint}")
         if e.http_status == 401:
@@ -326,13 +328,46 @@ class Tool:
             )
         sys.exit(f"Transfer API error {e.http_status} ({e.code}): {e.message}")
 
+    def _login_advice(self, gare) -> str:
+        """Say what a login still needs, after one failed or could not run.
+
+        :param gare: the parsed requirements from the API error
+        :returns: advice naming the identity or domain to sign in with
+        """
+        params = gare.authorization_parameters
+        need = params.session_required_single_domain or []
+        who = params.session_required_identities or []
+        if not sys.stdin.isatty():
+            return (
+                "This needs you to log in (consent, or a high assurance session).\n"
+                f"Run the same {self.name} command in an interactive terminal and "
+                "it will ask you to."
+            )
+        if need or who:
+            names = ", ".join(need) or ", ".join(who)
+            return (
+                f"Globus still refused after logging in. This collection requires "
+                f"a recent sign-in with: {names}\n"
+                f"Run it again, and on the Globus page sign in with that identity "
+                f"(not another linked one). Check yours with:  {self.name} whoami "
+                "--format json"
+            )
+        return "Globus still refused after logging in; try again."
+
     # ---- login / logout / whoami ----------------------------------------
     def cmd_login(self, args):
         """Log in through the SDK's login flow and store refresh tokens.
 
+        Always a fresh sign-in (``prompt=login``), as in globus-cli, so a
+        browser's existing session cannot stand in for one -- high assurance
+        collections need a recent authentication.
+
         :param args: parsed arguments
         """
-        self.app.login(force=args.force)
+        self.app.login(
+            force=args.force,
+            auth_params=globus_sdk.gare.GlobusAuthorizationParameters(prompt="login"),
+        )
         if self.login_check:
             self.login_check(self, self.app)
         else:
