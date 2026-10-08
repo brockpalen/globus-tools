@@ -21,6 +21,7 @@ import dataclasses
 import json
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 
 try:
@@ -119,6 +120,10 @@ class Tool:
         self._app = None
         self._config = None
         self._storage = None
+        # serialises re-logins: parallel listings that all hit an expired
+        # high assurance session must produce one login, not eight
+        self._login_lock = threading.Lock()
+        self._logins = 0
 
     def get_client_id(self) -> str:
         """Resolve the Globus client UUID to authenticate as.
@@ -153,16 +158,16 @@ class Tool:
     def config(self) -> GlobusAppConfig:
         """This tool's GlobusApp configuration.
 
-        A consent the API asks for mid-command is handled by the SDK, which
-        runs the login flow and retries -- but only with a terminal to log
-        in from. Otherwise the error is reported instead (:meth:`api_error`).
+        The SDK's own ``auto_redrive_gares`` is off: it only acts on 403
+        responses, and a high assurance collection reports an expired or
+        wrong-domain session from a directory listing as a 502. Re-login is
+        handled by :meth:`call` and :meth:`run` instead, for any status.
 
         :returns: the configuration, without token storage yet
         """
         if self._config is None:
             self._config = GlobusAppConfig(
                 request_refresh_tokens=True,
-                auto_redrive_gares=sys.stdin.isatty(),
                 login_flow_manager=StderrLoginFlowManager,
             )
         return self._config
@@ -186,6 +191,9 @@ class Tool:
                 config=self.config,
                 namespace=STORAGE_NAMESPACE,
             )
+            # this tool's own directory is used by nothing else, so it can
+            # be private without the compatibility cost of ~/.globus
+            security.private_directory(os.path.dirname(self._storage.filepath))
         return self._storage
 
     @property
@@ -234,6 +242,52 @@ class Tool:
         return UserApp(
             self.name, client_id=cid, scope_requirements=SCOPES, config=config
         )
+
+    # ---- re-login on demand ---------------------------------------------
+    def call(self, fn, *args, **kwargs):
+        """Call the API, logging in again once if it asks for that.
+
+        A Globus Authorization Requirements Error -- consent for a GCS v5
+        collection, or a high assurance session that has expired or needs
+        a particular domain -- names what the login must satisfy. On a
+        terminal, log in with exactly that and retry; otherwise re-raise for
+        :meth:`api_error` to explain.
+
+        Safe from many threads at once: whichever thread fails first logs
+        in, and the rest retry with the new session.
+
+        :param fn: the API method, e.g. ``tc.operation_ls``
+        :param args: positional arguments for it
+        :param kwargs: keyword arguments for it
+        :returns: whatever ``fn`` returns
+        """
+        seen = self._logins
+        try:
+            return fn(*args, **kwargs)
+        except globus_sdk.GlobusAPIError as error:
+            if not self.relogin(error, seen):
+                raise
+        return fn(*args, **kwargs)
+
+    def relogin(self, error, seen) -> bool:
+        """Log in again to satisfy what an API error asked for.
+
+        :param error: the API error
+        :param seen: the login count when the failed request began; if
+            another thread has logged in since, just retry
+        :returns: True if a retry may now succeed, False if it cannot
+        """
+        gare = _to_gare(error)
+        if gare is None or not sys.stdin.isatty():
+            return False
+        with self._login_lock:
+            if self._logins == seen:
+                message = gare.authorization_parameters.session_message
+                if message:
+                    print(f"\n{message}", file=sys.stderr)
+                self.app.login(auth_params=gare.authorization_parameters)
+                self._logins += 1
+        return True
 
     def transfer_client(self, args) -> globus_sdk.TransferClient:
         """A Transfer API client on this tool's app.
@@ -350,7 +404,13 @@ class Tool:
         args.tool = self
         args._tc = getattr(args, "_tc", None)
         try:
-            args.func(args)
+            seen = self._logins
+            try:
+                args.func(args)
+            except globus_sdk.GlobusAPIError as e:
+                if not self.relogin(e, seen):
+                    raise
+                args.func(args)
         except globus_sdk.GlobusAPIError as e:
             self.api_error(e)
         except BrokenPipeError:  # piping into head/grep -m
@@ -480,13 +540,22 @@ def age_seconds(val):
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
+def _to_gare(error):
+    """Parse what an API error needs from a new login, if anything.
+
+    :param error: a Globus API error
+    :returns: a GARE, or None if the error is not asking for a login
+    """
+    try:
+        return globus_sdk.gare.to_gare(error)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def _is_gare(error) -> bool:
     """Whether an API error asks for a new login or consent.
 
     :param error: a Globus API error
     :returns: True for a Globus Authorization Requirements Error
     """
-    try:
-        return globus_sdk.gare.is_gare(error)
-    except (AttributeError, TypeError, ValueError):
-        return False
+    return _to_gare(error) is not None

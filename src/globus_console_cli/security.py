@@ -25,6 +25,7 @@ __all__ = [
     "UnsafeTokenFile",
     "check_token_file",
     "ensure_globus_dir",
+    "private_directory",
 ]
 
 
@@ -73,3 +74,21 @@ def check_token_file(path: str) -> str | None:
         "If other users could have copied it, revoke this app's access at "
         "https://app.globus.org/settings/consents and log in again."
     )
+
+
+def private_directory(path: str) -> None:
+    """Make a directory only this tool uses private (700).
+
+    ``~/.globus/app/<client-id>/<tool>`` holds the token file and nothing
+    another program needs, so unlike the shared ``~/.globus`` it can be
+    locked down: nobody else can create a file -- or a symlink in place of
+    the token file -- inside it.
+
+    :param path: the directory, which the SDK has just created
+    """
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        return
+    if st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(path, 0o700)

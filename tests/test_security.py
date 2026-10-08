@@ -153,11 +153,9 @@ def test_the_two_tools_keep_separate_tokens(home):
     assert fs_file != console_file
 
 
-@pytest.mark.parametrize("tty", [True, False])
-def test_automatic_relogin_only_with_a_terminal(home, monkeypatch, tty):
-    """A consent prompt needs someone to answer it; cron gets an error."""
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
-    assert common.Tool("globus-fs").app.config.auto_redrive_gares is tty
+def test_sdk_403_only_redrive_is_off(home):
+    """Re-login is ours: the SDK's only fires on 403, HA sends 502."""
+    assert common.Tool("globus-fs").app.config.auto_redrive_gares is False
 
 
 # ---- login prompt on stderr -------------------------------------------------

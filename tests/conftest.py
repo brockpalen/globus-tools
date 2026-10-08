@@ -53,7 +53,7 @@ class FakeAPIError(globus_sdk.TransferAPIError):
     overridden rather than assigned.
     """
 
-    def __init__(self, http_status, code, message):  # noqa: B042
+    def __init__(self, http_status, code, message, raw_json=None):  # noqa: B042
         """Record the three attributes the tool reads off an API error.
 
         ``super().__init__()`` is deliberately bypassed: TransferAPIError's
@@ -64,11 +64,14 @@ class FakeAPIError(globus_sdk.TransferAPIError):
         :param http_status: the HTTP status the API returned
         :param code: the Globus error code
         :param message: the human-readable message
+        :param raw_json: the response body, e.g. one carrying
+            ``authorization_parameters`` for a login demand
         """
-        Exception.__init__(self, http_status, code, message)
+        Exception.__init__(self, http_status, code, message, raw_json)
         self.http_status = http_status
         self.code = code
         self._message = message
+        self._raw_json = raw_json or {"code": code, "message": message}
 
     def __str__(self):
         """Render as the message alone.
@@ -84,6 +87,22 @@ class FakeAPIError(globus_sdk.TransferAPIError):
         :returns: the message this error was built with
         """
         return self._message
+
+    @property
+    def raw_json(self):
+        """The response body, as the SDK's GARE parser reads it.
+
+        :returns: the JSON document this error was built with
+        """
+        return self._raw_json
+
+    @property
+    def errors(self):
+        """Sub-errors; the stub has none.
+
+        :returns: an empty list
+        """
+        return []
 
     @property
     def info(self):
@@ -292,3 +311,28 @@ def run_console(monkeypatch):
     :returns: a callable taking ``(argv, client)`` and returning the client
     """
     return _runner(monkeypatch, console.main)
+
+
+def ha_session_error():
+    """The error a high assurance collection returns for a wrong session.
+
+    Shaped exactly like the real one from a UMich sensitive collection: a
+    502, not a 403, carrying the login requirements.
+
+    :returns: a :class:`FakeAPIError`
+    """
+    return FakeAPIError(
+        502,
+        "ExternalError.DirListingFailed.LoginFailed",
+        "Login Failed",
+        raw_json={
+            "code": "ExternalError.DirListingFailed.LoginFailed",
+            "message": "Login Failed",
+            "authorization_parameters": {
+                "session_message": "Session reauthentication required",
+                "session_required_identities": [],
+                "session_required_mfa": False,
+                "session_required_single_domain": ["umich.edu"],
+            },
+        },
+    )

@@ -181,6 +181,7 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
         local_user=getattr(args, "local_user", None),
         progress=sys.stderr.isatty() and args.format == "table",
         skip_names=skip,
+        call=args.tool.call,
     )
     produced = False
     for item in walker.walk(path, maxdepth=maxdepth):
@@ -189,14 +190,15 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
     walker.clear_progress()
     if not produced and walker.errors:
         first = walker.errors[0]
-        if first.code in ("ConsentRequired", "PermissionDenied"):
+        if first.needs_login or first.code == "PermissionDenied":
             sys.stderr.write(str(first) + "\n")
-            if first.code == "ConsentRequired":
-                # on a terminal the SDK logs in and retries by itself, so
-                # this only happens without one
+            if first.needs_login:
+                # on a terminal the login happens in place, so this only
+                # happens without one
                 sys.stderr.write(
-                    "\nThis collection needs your consent. Run the same command "
-                    "in an interactive terminal and it will ask you to log in.\n"
+                    "\nThis collection needs you to log in (consent, or a high "
+                    "assurance session). Run the same command in an interactive "
+                    "terminal and it will ask you to.\n"
                 )
             sys.exit(1)
     args._walker = walker
@@ -548,7 +550,7 @@ def cmd_ls_fs(args):
     if args.local_user:
         kwargs["local_user"] = args.local_user
     try:
-        entries = list(tc.operation_ls(collection, **kwargs))
+        entries = list(args.tool.call(tc.operation_ls, collection, **kwargs))
     except globus_sdk.TransferAPIError as e:
         args.tool.api_error(e)
     _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])

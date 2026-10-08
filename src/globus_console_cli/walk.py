@@ -81,18 +81,20 @@ def parse_age(text):
 class WalkError:
     """One directory that could not be listed, and why."""
 
-    __slots__ = ("path", "code", "message")
+    __slots__ = ("path", "code", "message", "needs_login")
 
-    def __init__(self, path, code, message):
+    def __init__(self, path, code, message, needs_login=False):
         """Record a failed directory listing.
 
         :param path: the directory that could not be listed
         :param code: the API error code
         :param message: the API error message
+        :param needs_login: True if a new login or consent would fix it
         """
         self.path = path
         self.code = code
         self.message = message
+        self.needs_login = needs_login
 
     def __str__(self):
         """Render the error as one line.
@@ -120,6 +122,7 @@ class Walker:
         progress=False,
         retries=3,
         skip_names=(),
+        call=None,
     ):
         """Configure a walk.
 
@@ -132,6 +135,8 @@ class Walker:
         :param retries: attempts after a 429 or 5xx before giving up
         :param skip_names: directory names never descended into, such as
             ``.snapshot``; they are still reported in their parent's listing
+        :param call: wrapper used to make each API call, e.g. one that logs
+            in again when the API asks (:meth:`Tool.call`); default direct
         """
         self.tc = tc
         self.collection = collection
@@ -141,6 +146,7 @@ class Walker:
         self.progress = progress
         self.retries = retries
         self.skip_names = frozenset(skip_names)
+        self.call = call or (lambda fn, *a, **kw: fn(*a, **kw))
         self.errors = []
         self.dirs_scanned = 0
         self.entries_seen = 0
@@ -159,9 +165,13 @@ class Walker:
         delay = 1.0
         for attempt in range(self.retries + 1):
             try:
-                res = self.tc.operation_ls(self.collection, **kwargs)
+                res = self.call(self.tc.operation_ls, self.collection, **kwargs)
                 return list(res), None
             except globus_sdk.TransferAPIError as e:
+                if _needs_login(e):
+                    # a login demand, even when sent as a 502 (high
+                    # assurance does); retrying without one cannot help
+                    return [], WalkError(path, e.code, e.message, needs_login=True)
                 retryable = e.http_status in (429, 500, 502, 503, 504)
                 if retryable and attempt < self.retries:
                     time.sleep(delay)
@@ -231,3 +241,15 @@ class Walker:
             and not entry.get("link_target")
             and entry.get("name") not in self.skip_names
         )
+
+
+def _needs_login(error):
+    """Whether an API error is asking for a new login or consent.
+
+    :param error: a Transfer API error
+    :returns: True for a Globus Authorization Requirements Error
+    """
+    try:
+        return globus_sdk.gare.to_gare(error) is not None
+    except (AttributeError, TypeError, ValueError):
+        return False
