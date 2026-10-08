@@ -5,7 +5,7 @@ import json
 import pytest
 from conftest import COLLECTION, GB, MB, TREE, FakeTransferClient
 
-from globus_console_cli import fs
+from globus_tools import fs
 
 MIB = 1024 * 1024
 

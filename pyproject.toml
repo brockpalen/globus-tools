@@ -3,9 +3,11 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "globus-console-cli"
-description = "globus-console (admin Activity view) and globus-fs (ls/find/du) for Globus"
+name = "globus-tools"
+description = "globus-fs (ls, find, du, archivescan) and globus-console (Activity view): command line tools for Globus"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 dependencies = ["globus-sdk>=4,<5", "humanfriendly>=10"]
 dynamic = ["version"]
@@ -26,11 +28,11 @@ dev = [
 ]
 
 [project.scripts]
-globus-console = "globus_console_cli.console:main"
-globus-fs = "globus_console_cli.fs:main"
+globus-console = "globus_tools.console:main"
+globus-fs = "globus_tools.fs:main"
 
 [tool.setuptools.dynamic]
-version = { attr = "globus_console_cli.__version__" }
+version = { attr = "globus_tools.__version__" }
 
 [tool.black]
 target-version = ["py39"]

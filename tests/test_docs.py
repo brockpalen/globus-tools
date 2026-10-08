@@ -8,7 +8,7 @@ doc stays honest.
 import argparse
 import pathlib
 
-from globus_console_cli import console, fs
+from globus_tools import console, fs
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 USAGE = (ROOT / "USAGE.md").read_text()

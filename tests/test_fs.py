@@ -9,7 +9,7 @@ import datetime as dt
 import pytest
 from conftest import GB, MB, FakeTransferClient
 
-from globus_console_cli import fs, walk
+from globus_tools import fs, walk
 
 COLL = "cccc1111-2222-3333-4444-555566667777"
 

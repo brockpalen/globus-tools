@@ -2,7 +2,7 @@
 
 import pytest
 
-from globus_console_cli import common
+from globus_tools import common
 
 
 @pytest.fixture

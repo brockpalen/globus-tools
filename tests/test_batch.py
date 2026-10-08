@@ -10,7 +10,7 @@ import shlex
 import pytest
 from conftest import COLLECTION, TREE, FakeTransferClient
 
-from globus_console_cli import fs
+from globus_tools import fs
 
 AWKWARD = [
     "with space.txt",

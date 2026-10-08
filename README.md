@@ -1,6 +1,7 @@
-# globus-console-cli
+# globus-tools
 
-Two command line tools for a Globus subscription:
+Two command line tools for Globus. Community tools, not an official Globus
+product.
 
 | command | for | needs |
 | --- | --- | --- |
@@ -27,8 +28,23 @@ TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES
 0f3a91c2  ACTIVE    PERMISSION_DENIED    user2@umich.edu  0B/s   600/2400  15.0G   14  1h14m  Great Lakes scratch  Turbo Research Storage
 ```
 
+## Try it
+
+Needs [uv](https://docs.astral.sh/uv/getting-started/installation/)
+(`curl -LsSf https://astral.sh/uv/install.sh | sh`):
+
+```sh
+uv tool install git+https://github.com/brockpalen/globus-tools
+globus-fs login
+globus-fs ls <collection-uuid>:/
+```
+
+`uv tool upgrade globus-tools` picks up changes. Please report problems,
+and what you tried, as
+[GitHub issues](https://github.com/brockpalen/globus-tools/issues).
+
 Every command and option, with examples: **[USAGE.md](USAGE.md)**.
-Building and installing: **[INSTALL.md](INSTALL.md)**.
+Building a site-wide install: **[INSTALL.md](INSTALL.md)**.
 
 ## Who can use `globus-console`
 

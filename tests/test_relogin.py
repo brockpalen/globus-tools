@@ -12,7 +12,7 @@ import threading
 import pytest
 from conftest import COLLECTION, FakeAPIError, FakeTransferClient, ha_session_error
 
-from globus_console_cli import common, walk
+from globus_tools import common, walk
 
 
 class FakeApp:

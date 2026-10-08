@@ -10,7 +10,7 @@ import os
 import pytest
 from conftest import COLLECTION
 
-from globus_console_cli import fs, shortcuts
+from globus_tools import fs, shortcuts
 
 DATADEN = "ab65757f-00f5-4e5b-aa21-133187732a01"
 
@@ -283,7 +283,7 @@ def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
 
 def test_user_file_sits_beside_the_token_file(tmp_path, monkeypatch):
     """Everything per-user in one directory, like ~/.ssh."""
-    from globus_console_cli import common
+    from globus_tools import common
 
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("GLOBUS_FS_CLIENT_ID", raising=False)

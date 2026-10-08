@@ -4,8 +4,8 @@ import datetime as dt
 
 import pytest
 
-from globus_console_cli import common
-from globus_console_cli import tasks as tasklib
+from globus_tools import common
+from globus_tools import tasks as tasklib
 
 
 @pytest.mark.parametrize(

@@ -14,7 +14,7 @@ import pytest
 from globus_sdk.login_flows import CommandLineLoginFlowEOFError
 from globus_sdk.token_storage import JSONTokenStorage
 
-from globus_console_cli import common, security
+from globus_tools import common, security
 
 
 def mode(path):

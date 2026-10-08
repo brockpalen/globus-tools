@@ -20,10 +20,9 @@ packaging/build-standalone.sh /sw/pkgs/globus-fs/0.2.0
 └── BUILD-INFO           version, commit, build date and target
 ```
 
-Build as the account that owns your software tree, with `umask 022`:
-every user runs this code with their own Globus tokens, so nothing in it
-may be writable by anyone else. Check with
-`find /sw/pkgs/globus-fs/0.2.0 -perm /022 ! -type l` (should print nothing).
+Build as the account that owns your software tree. Every user runs this
+code with their own Globus tokens, so the script removes group and other
+write permission from the whole tree, and fails if any remains.
 
 The script refuses to write into a non-empty directory, so build each
 version into its own. The tree is relocatable and runs read-only. The

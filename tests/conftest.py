@@ -10,7 +10,7 @@ import datetime as dt
 import globus_sdk
 import pytest
 
-from globus_console_cli import common, console, fs
+from globus_tools import common, console, fs
 
 MB = 1000**2
 GB = 1000**3

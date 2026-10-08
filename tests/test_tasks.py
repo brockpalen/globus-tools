@@ -3,7 +3,7 @@
 import pytest
 from conftest import make_task
 
-from globus_console_cli import tasks as tasklib
+from globus_tools import tasks as tasklib
 
 
 def test_resolve_fields_maps_names():
@@ -163,13 +163,13 @@ def test_globus_fs_does_not_offer_admin_only_filters(run, flag):
 @pytest.mark.parametrize("command", ["ls", "find", "du", "bookmark", "collections"])
 def test_globus_console_has_no_filesystem_commands(run_console, command):
     """The admin tool is the Activity view only."""
-    from globus_console_cli import console
+    from globus_tools import console
 
     assert command not in console.build_parser().command_names
 
 
 def test_globus_fs_has_no_admin_commands():
     """Nothing in the user tool needs an admin role."""
-    from globus_console_cli import fs
+    from globus_tools import fs
 
     assert "endpoints" not in fs.build_parser().command_names

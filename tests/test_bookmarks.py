@@ -7,7 +7,7 @@ the web app, so the command names and argument order match globus-cli.
 import pytest
 from conftest import COLLECTION
 
-from globus_console_cli import fs
+from globus_tools import fs
 
 
 @pytest.fixture(autouse=True)

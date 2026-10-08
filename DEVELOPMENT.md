@@ -14,7 +14,7 @@ method has a docstring. Updating dependencies: see
 ## Layout
 
 ```
-src/globus_console_cli/
+src/globus_tools/
     console.py      globus-console: the Activity view
     fs.py           globus-fs: ls, find, du, archivescan, bookmarks, shortcuts
     tasks.py        the task table both tools draw

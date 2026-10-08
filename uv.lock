@@ -1116,7 +1116,24 @@ wheels = [
 ]
 
 [[package]]
-name = "globus-console-cli"
+name = "globus-sdk"
+version = "4.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography", version = "47.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version <= '3.9'" },
+    { name = "cryptography", version = "50.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version > '3.9'" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "requests", version = "2.32.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "requests", version = "2.34.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/6e/b519c4b64e4f16dfbcfd95b6b1c962f71d4135cf08bcac02b752650e8cc8/globus_sdk-4.9.1.tar.gz", hash = "sha256:7cb477f863e607ef94687b83fadfea4e89f6e655d70dc5489c39e5dd963fb43e", size = 290286, upload-time = "2026-09-25T16:37:16.805Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9a/01/0ad0b4a109d16962e0fc063518e44c6b92f4e70a01c9a7998ef138b560c5/globus_sdk-4.9.1-py3-none-any.whl", hash = "sha256:179183b7b9b73849d22c6231fbd509e4f3e695e00e2180c310fb7388625b26f3", size = 450839, upload-time = "2026-09-25T16:37:15.104Z" },
+]
+
+[[package]]
+name = "globus-tools"
 source = { editable = "." }
 dependencies = [
     { name = "globus-sdk" },
@@ -1160,23 +1177,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "uv", specifier = ">=0.12.21" },
-]
-
-[[package]]
-name = "globus-sdk"
-version = "4.9.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cryptography", version = "47.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version <= '3.9'" },
-    { name = "cryptography", version = "50.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version > '3.9'" },
-    { name = "pyjwt", extra = ["crypto"] },
-    { name = "requests", version = "2.32.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "requests", version = "2.34.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/13/6e/b519c4b64e4f16dfbcfd95b6b1c962f71d4135cf08bcac02b752650e8cc8/globus_sdk-4.9.1.tar.gz", hash = "sha256:7cb477f863e607ef94687b83fadfea4e89f6e655d70dc5489c39e5dd963fb43e", size = 290286, upload-time = "2026-09-25T16:37:16.805Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/01/0ad0b4a109d16962e0fc063518e44c6b92f4e70a01c9a7998ef138b560c5/globus_sdk-4.9.1-py3-none-any.whl", hash = "sha256:179183b7b9b73849d22c6231fbd509e4f3e695e00e2180c310fb7388625b26f3", size = 450839, upload-time = "2026-09-25T16:37:15.104Z" },
 ]
 
 [[package]]

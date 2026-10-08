@@ -91,15 +91,20 @@ for tool in fs console; do
     cat >"$PREFIX/bin/globus-$tool" <<EOF
 #!/bin/sh
 here=\$(command -p dirname -- "\$(command -p readlink -f -- "\$0")")
-exec "\$here/../python/bin/python3" -I -m globus_console_cli.$tool "\$@"
+exec "\$here/../python/bin/python3" -I -m globus_tools.$tool "\$@"
 EOF
     chmod 755 "$PREFIX/bin/globus-$tool"
 done
 
-# 4. Record what was built, and prove the result starts.
-version=$("$py" -I -c 'import globus_console_cli as g; print(g.__version__)')
+# 4. Precompile the bundled standard library too. Some of it (sqlite3,
+#    concurrent, ...) ships without bytecode, and a read-only install
+#    would otherwise try, and fail, to write those caches on every run.
+"$py" -I -m compileall -q "$PREFIX/python/lib" >/dev/null
+
+# 5. Record what was built, and prove the result starts.
+version=$("$py" -I -c 'import globus_tools as g; print(g.__version__)')
 {
-    echo "globus-console-cli $version"
+    echo "globus-tools $version"
     echo "built $(date -u +%Y-%m-%dT%H:%M:%SZ) on $(uname -n)"
     echo "python $("$py" -I -c 'import platform; print(platform.python_version())')"
     echo "target ${platform}"
@@ -108,6 +113,14 @@ version=$("$py" -I -c 'import globus_console_cli as g; print(g.__version__)')
 
 "$PREFIX/bin/globus-fs" --help >/dev/null
 "$PREFIX/bin/globus-console" --help >/dev/null
+
+# 6. Last of all, so nothing written above escapes it: no file may be
+#    writable by anyone else, since every user runs this code holding their
+#    own Globus tokens. uv writes some metadata (dist-info RECORD) 664
+#    whatever the umask, so enforce it rather than trust the builder's.
+chmod -R go-w "$PREFIX"
+writable=$(find "$PREFIX" -perm /022 ! -type l | head -5)
+[ -z "$writable" ] || die "still writable by group or other: $writable"
 
 echo "built $PREFIX"
 cat "$PREFIX/BUILD-INFO"
