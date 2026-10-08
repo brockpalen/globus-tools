@@ -1,157 +1,191 @@
-"""The credential store guard.
+"""The token file guard, and the SDK pieces it wraps.
 
-``tokens.json`` holds a refresh token, so on a shared login node an exposed
-file lets any local user act as its owner. These tests cover the checks that
-make the tool refuse rather than use it.
+The rule matches archivetar (brockpalen/archivetar#49): the token file must
+be 600 and is tightened with a warning if not; ``~/.globus`` is shared with
+globus-cli and created 700 only when missing.
 """
 
+import io
 import os
+import stat
+import sys
 
 import pytest
+from globus_sdk.login_flows import CommandLineLoginFlowEOFError
+from globus_sdk.token_storage import JSONTokenStorage
 
-from globus_console_cli import security
+from globus_console_cli import common, security
+
+
+def mode(path):
+    """Permission bits of a path.
+
+    :param path: the file or directory
+    :returns: e.g. ``0o600``
+    """
+    return stat.S_IMODE(os.stat(path).st_mode)
 
 
 @pytest.fixture
-def store(tmp_path):
-    """A credential directory with a token file, correctly locked down.
+def token_file(tmp_path):
+    """A token file with the given mode.
 
-    :param tmp_path: pytest's temporary directory
-    :returns: ``(directory, token_file)`` as strings
+    :param tmp_path: pytest's per-test directory
+    :returns: a callable taking a mode and returning the path
     """
-    directory = tmp_path / "store"
-    directory.mkdir(mode=0o700)
-    token = directory / "tokens.json"
-    token.write_text('{"refresh_token": "secret"}')
-    token.chmod(0o600)
-    return str(directory), str(token)
+
+    def make(file_mode):
+        """Write the file and set its mode.
+
+        :param file_mode: the permission bits to apply
+        :returns: the file's path
+        """
+        path = tmp_path / "tokens.json"
+        path.write_text("{}")
+        os.chmod(path, file_mode)
+        return str(path)
+
+    return make
 
 
-def test_correct_permissions_pass(store):
-    """0700 directory and 0600 file are accepted."""
-    directory, token = store
-    assert security.assert_secure(directory, token) == []
+def test_private_file_is_left_alone(token_file):
+    """600 is correct: no change, no warning."""
+    path = token_file(0o600)
+    assert security.check_token_file(path) is None
+    assert mode(path) == 0o600
 
 
-def test_missing_file_is_not_an_error(store, tmp_path):
-    """A token file that does not exist yet is fine; login creates it."""
-    directory, _ = store
-    security.check_path(str(tmp_path / "store" / "nothing-here.json"))
+@pytest.mark.parametrize("loose", [0o644, 0o640, 0o664, 0o604, 0o660, 0o777])
+def test_any_group_or_other_access_is_tightened_with_a_warning(token_file, loose):
+    """Older tools wrote with the user's umask; fix it rather than refuse."""
+    path = token_file(loose)
+    warning = security.check_token_file(path)
+    assert mode(path) == 0o600
+    assert stat.filemode(stat.S_IFREG | loose) in warning
+    assert "changed to -rw-------" in warning
+    assert "revoke" in warning
 
 
-@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o666, 0o777])
-def test_any_group_or_other_access_is_refused(store, mode):
-    """Group or other access of any kind fails, as ssh does for private keys."""
-    _, token = store
-    os.chmod(token, mode)
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path(token)
-    assert caught.value.reason == "mode"
-    assert caught.value.fixable
+def test_missing_file_is_not_an_error(tmp_path):
+    """Before the first login there is nothing to check."""
+    assert security.check_token_file(str(tmp_path / "absent.json")) is None
 
 
-@pytest.mark.parametrize("mode", [0o750, 0o755, 0o770])
-def test_exposed_directory_is_refused(store, mode):
-    """A readable directory is refused even when the file itself is 0600."""
-    directory, _ = store
-    os.chmod(directory, mode)
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path(directory, must_be_dir=True)
-    assert caught.value.reason == "mode"
+def test_file_owned_by_someone_else_is_refused(token_file, monkeypatch):
+    """Another user's tokens cannot be fixed, and must not be used."""
+    path = token_file(0o600)
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(path).st_uid + 1)
+    with pytest.raises(security.UnsafeTokenFile, match="not you"):
+        security.check_token_file(path)
 
 
-def test_symlinked_token_file_is_refused(store, tmp_path):
-    """A link could redirect the write or point at a file someone else owns."""
-    directory, token = store
-    os.unlink(token)
-    os.symlink("/etc/passwd", token)
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path(token)
-    assert caught.value.reason == "symlink"
+def test_missing_globus_dir_is_created_private(tmp_path):
+    """A fresh ~/.globus is 700."""
+    path = tmp_path / ".globus"
+    security.ensure_globus_dir(str(path))
+    assert mode(path) == 0o700
 
 
-def test_file_owned_by_another_user_is_refused():
-    """Never read or write another user's credentials."""
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path("/etc/shadow")
-    assert caught.value.reason == "owner"
+def test_existing_globus_dir_is_not_touched(tmp_path):
+    """globus-cli makes ~/.globus 775; that must not block us (archivetar#49)."""
+    path = tmp_path / ".globus"
+    path.mkdir()
+    os.chmod(path, 0o775)
+    security.ensure_globus_dir(str(path))
+    assert mode(path) == 0o775
 
 
-def test_directory_where_a_file_is_expected_is_refused(store):
-    """A directory standing in for the token file is rejected on type."""
-    directory, _ = store
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path(directory)
-    assert caught.value.reason == "type"
+# ---- wired into the app ---------------------------------------------------
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """An empty HOME, so the SDK's token path lands in tmp_path.
 
-
-def test_fix_repairs_modes_and_reports_what_changed(store):
-    """--fix-permissions tightens what this user owns."""
-    directory, token = store
-    os.chmod(directory, 0o755)
-    os.chmod(token, 0o644)
-    repaired = security.assert_secure(directory, token, fix=True)
-    assert set(repaired) == {directory, token}
-    assert os.stat(directory).st_mode & 0o777 == 0o700
-    assert os.stat(token).st_mode & 0o777 == 0o600
-
-
-def test_fix_never_changes_ownership():
-    """Repairing modes must not make another user's store usable."""
-    with pytest.raises(security.InsecureCredentialStore):
-        security.assert_secure("/etc", "/etc/shadow", fix=True)
-
-
-def test_secure_directory_creates_it_locked_down(tmp_path):
-    """A fresh store is created 0700 rather than inheriting the umask."""
-    directory = str(tmp_path / "fresh")
-    security.secure_directory(directory)
-    assert os.stat(directory).st_mode & 0o777 == 0o700
-
-
-def test_secure_directory_refuses_an_exposed_existing_one(tmp_path):
-    """An existing loose directory is refused, not silently tightened."""
-    directory = tmp_path / "loose"
-    directory.mkdir(mode=0o755)
-    with pytest.raises(security.InsecureCredentialStore):
-        security.secure_directory(str(directory))
-
-
-def test_secure_directory_tightens_when_fixing(tmp_path):
-    """With fix=True it repairs instead, so --fix-permissions can work.
-
-    Without this the fix flag could never repair a loose directory: the
-    check ran first and raised before the repair was reached.
+    :param tmp_path: pytest's per-test directory
+    :param monkeypatch: pytest's monkeypatch fixture
+    :returns: the new HOME
     """
-    directory = tmp_path / "loose"
-    directory.mkdir(mode=0o755)
-    security.secure_directory(str(directory), fix=True)
-    assert os.stat(directory).st_mode & 0o777 == 0o700
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("GLOBUS_FS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GLOBUS_FS_CLIENT_SECRET", raising=False)
+    return tmp_path
 
 
-def test_banner_names_the_file_and_the_fix(store):
-    """The refusal has to tell the user what to do about it."""
-    _, token = store
-    os.chmod(token, 0o644)
-    with pytest.raises(security.InsecureCredentialStore) as caught:
-        security.check_path(token)
-    banner = caught.value.banner()
-    assert "0644" in banner
-    assert token in banner
-    assert "chmod 0600" in banner
-    assert "Refusing to run" in banner
+def sdk_token_path(home):
+    """Where globus-sdk keeps globus-fs tokens under a given HOME.
+
+    :param home: the HOME directory
+    :returns: the token file path
+    """
+    return (
+        home
+        / ".globus"
+        / "app"
+        / common.DEFAULT_CLIENT_ID
+        / "globus-fs"
+        / "tokens.json"
+    )
 
 
-def test_exception_survives_copy(store):
-    """All args go to super() so pickle and copy.copy() work."""
-    import copy
-
-    error = security.InsecureCredentialStore("/p", "mode", "detail", True)
-    clone = copy.copy(error)
-    assert str(clone) == "detail"
+def test_tokens_live_where_the_sdk_puts_them(home):
+    """The SDK's default location, next to globus-cli's, not a private dir."""
+    tool = common.Tool("globus-fs")
+    assert tool.token_file == str(sdk_token_path(home))
+    assert mode(home / ".globus") == 0o700
 
 
-def test_format_mode():
-    """Modes render as four octal digits."""
-    assert security.format_mode(0o100644) == "0644"
-    assert security.format_mode(0o40700) == "0700"
+def test_loose_token_file_is_tightened_before_the_app_uses_it(home, capsys):
+    """An old 644 file is fixed, with a warning, as the app starts."""
+    path = sdk_token_path(home)
+    path.parent.mkdir(parents=True)
+    # a real, empty token file in the SDK's own format, then loosened the
+    # way an older tool writing under umask 022 would have left it
+    JSONTokenStorage(str(path)).store_token_data_by_resource_server({})
+    os.chmod(path, 0o644)
+    common.Tool("globus-fs").app
+    assert mode(path) == 0o600
+    assert "were too open" in capsys.readouterr().err
+
+
+def test_the_two_tools_keep_separate_tokens(home):
+    """Logging out of one must not log you out of the other."""
+    fs_file = common.Tool("globus-fs").token_file
+    console_file = common.Tool("globus-console").token_file
+    assert fs_file != console_file
+
+
+@pytest.mark.parametrize("tty", [True, False])
+def test_automatic_relogin_only_with_a_terminal(home, monkeypatch, tty):
+    """A consent prompt needs someone to answer it; cron gets an error."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+    assert common.Tool("globus-fs").app.config.auto_redrive_gares is tty
+
+
+# ---- login prompt on stderr -------------------------------------------------
+@pytest.fixture
+def flow():
+    """The stderr login flow, on a native client that makes no requests.
+
+    :returns: a :class:`common.StderrLoginFlowManager`
+    """
+    import globus_sdk
+
+    client = globus_sdk.NativeAppAuthClient(common.DEFAULT_CLIENT_ID)
+    return common.StderrLoginFlowManager(client)
+
+
+def test_login_prompt_never_touches_stdout(flow, capsys, monkeypatch):
+    """A login mid-`find | xargs` must not write into the pipe."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO("the-code\n"))
+    flow.print_authorize_url("https://auth.globus.org/example")
+    assert flow.prompt_for_code() == "the-code"
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "https://auth.globus.org/example" in err
+    assert "Authorization Code" in err
+
+
+def test_login_prompt_without_input_explains_itself(flow, monkeypatch):
+    """No stdin gets the SDK's 'are you in a terminal?' error, not a hang."""
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    with pytest.raises(CommandLineLoginFlowEOFError):
+        flow.prompt_for_code()

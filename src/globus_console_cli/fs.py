@@ -61,7 +61,9 @@ def resolve_bookmark(tc, name_or_id):
     return None
 
 
-SHORTCUT_FILE = os.path.join(TOOL.config_dir, "collections.conf")
+#: A user's own shortcuts. Not a credential -- tokens live where globus-sdk
+#: keeps them, under ~/.globus -- so this needs no special permissions.
+SHORTCUT_FILE = os.path.expanduser("~/.globus-fs/collections.conf")
 
 
 def site_shortcuts():
@@ -184,7 +186,12 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
         if first.code in ("ConsentRequired", "PermissionDenied"):
             sys.stderr.write(str(first) + "\n")
             if first.code == "ConsentRequired":
-                sys.stderr.write(globus_fs.consent_hint(collection, []))
+                # on a terminal the SDK logs in and retries by itself, so
+                # this only happens without one
+                sys.stderr.write(
+                    "\nThis collection needs your consent. Run the same command "
+                    "in an interactive terminal and it will ask you to log in.\n"
+                )
             sys.exit(1)
     args._walker = walker
 
@@ -537,11 +544,6 @@ def cmd_ls_fs(args):
     try:
         entries = list(tc.operation_ls(collection, **kwargs))
     except globus_sdk.TransferAPIError as e:
-        consent, scopes = globus_fs.needs_consent(e)
-        if consent:
-            sys.exit(
-                f"{e.code}: {e.message}\n" + globus_fs.consent_hint(collection, scopes)
-            )
         args.tool.api_error(e)
     _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
 
@@ -787,31 +789,6 @@ def _print_archivescan(row):
         print("Fraction Offline: n/a (no files)")
     else:
         print(f"Fraction Offline: {row['fraction_offline']:.5f} %")
-
-
-def cmd_consent(args):
-    """Grant the extra consent a GCS mapped collection needs for listing."""
-    app = args.tool.build_app(getattr(args, "client_id", None))
-    tc = globus_sdk.TransferClient(app=app)
-    try:
-        tc.add_app_data_access_scope(args.collection)
-    except globus_sdk.GlobusSDKUsageError as e:
-        sys.exit(f"cannot add the data_access scope: {e}")
-    app.login(force=True)
-    try:
-        tc.operation_ls(args.collection, path="/", query_params={"limit": 1})
-        print(f"Consent granted; {args.collection} is listable.")
-    except globus_sdk.TransferAPIError as e:
-        consent, scopes = globus_fs.needs_consent(e)
-        if consent:
-            sys.exit(
-                "Still ConsentRequired after login.\n"
-                + globus_fs.consent_hint(args.collection, scopes)
-                + "\nNote: data_access does not apply to guest "
-                "collections, GCP, or High Assurance collections -- "
-                "those use a different consent path."
-            )
-        sys.exit(f"Listing still failed: {e.code}: {e.message}")
 
 
 def _no_shortcuts_message():
@@ -1197,7 +1174,6 @@ def build_parser():
         "naming the collection",
     )
     f.add_argument("--limit", type=int, default=0, help="stop after N matches")
-    f.add_argument("--client-id", help="Globus client UUID")
     f.set_defaults(func=cmd_find, format="table", no_header=False)
 
     d = sub.add_parser("du", help="sizes and file counts per directory")
@@ -1241,14 +1217,6 @@ def build_parser():
     )
     add_common(a)
     a.set_defaults(func=cmd_archivescan)
-
-    c = sub.add_parser(
-        "consent",
-        help="grant the data_access consent a mapped " "collection needs for listing",
-    )
-    c.add_argument("collection", help="collection UUID")
-    c.add_argument("--client-id", help="Globus client UUID")
-    c.set_defaults(func=cmd_consent)
 
     col = sub.add_parser(
         "collections",

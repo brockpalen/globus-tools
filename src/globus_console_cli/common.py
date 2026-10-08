@@ -1,14 +1,23 @@
 """What globus-console and globus-fs share: identity, credentials, formatting.
 
-Each command is a :class:`Tool`. A tool owns its own configuration
-directory, token file and environment variable prefix, so logging out of
-one never logs you out of the other, and a user who only ever runs
-globus-fs never sees anything named after the admin console.
+Each command is a :class:`Tool` wrapping one globus-sdk ``GlobusApp``. The
+SDK owns the credential lifecycle -- where tokens live, the login flow,
+refresh, revocation on logout, and re-login when a collection asks for
+more consent -- and this module adds only what the SDK does not do:
+
+- check the token file's permissions before the SDK reads it
+  (:mod:`.security`, archivetar's rule), and
+- keep the login prompt on stderr, so a re-login that interrupts
+  ``find ... | xargs`` never writes into the pipe.
+
+Each tool is its own app, with its own token file, so logging out of one
+never logs you out of the other.
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -17,14 +26,11 @@ from datetime import datetime, timezone
 try:
     import globus_sdk
     from globus_sdk import ClientApp, GlobusAppConfig, UserApp
+    from globus_sdk.login_flows import CommandLineLoginFlowManager
     from globus_sdk.scopes import AuthScopes, TransferScopes
+    from globus_sdk.token_storage import JSONTokenStorage
 except ImportError as exc:  # pragma: no cover
     sys.exit(f"globus-sdk 4 is required ({exc}). Run:  pip install -U globus-sdk")
-
-try:  # module was renamed between globus-sdk 3.x and 4.x
-    from globus_sdk.token_storage import JSONTokenStorage
-except ImportError:  # pragma: no cover
-    from globus_sdk.tokenstorage import JSONTokenStorage
 
 from . import security
 
@@ -44,6 +50,9 @@ SCOPES = {
 #: same reason globus-cli ships its own. Never pair it with a client secret.
 DEFAULT_CLIENT_ID = "6a4a00f5-cded-42a4-a2e9-f535af8fc5b0"
 
+#: GlobusApp's storage namespace; fixed by the SDK, needed to build its storage.
+STORAGE_NAMESPACE = "DEFAULT"
+
 SERVICE_ACCOUNT_HELP = """\
 {env}_CLIENT_SECRET is set but {env}_CLIENT_ID is not.
 
@@ -55,14 +64,50 @@ A client secret belongs to a service account registration of your own, so
 """
 
 
+class StderrLoginFlowManager(CommandLineLoginFlowManager):
+    """The SDK's command line login, talking to the terminal on stderr.
+
+    Identical to :class:`CommandLineLoginFlowManager` except that the URL
+    and the code prompt go to stderr. A login can now start in the middle of
+    a command -- when a collection asks for consent -- and stdout may be a
+    pipe at that moment.
+    """
+
+    def print_authorize_url(self, authorize_url: str) -> None:
+        """Show the login URL on stderr.
+
+        :param authorize_url: where the user logs in and consents
+        """
+        rule = "-" * 36
+        print(
+            f"\nPlease authenticate with Globus here:\n{rule}\n"
+            f"{authorize_url}\n{rule}\n",
+            file=sys.stderr,
+        )
+
+    def prompt_for_code(self) -> str:
+        """Read the authorization code, prompting on stderr.
+
+        :returns: the code the user pasted
+        """
+        sys.stderr.write("Enter the resulting Authorization Code here: ")
+        sys.stderr.flush()
+        with self._handle_input_errors():
+            line = sys.stdin.readline()
+            if not line:
+                raise EOFError
+            return line.strip()
+
+
 class Tool:
-    """One command line tool: its name, credential store and error advice."""
+    """One command line tool: its name, its GlobusApp and its error advice."""
 
     def __init__(self, name, forbidden_hint="", login_check=None):
         """Describe a tool.
 
-        :param name: the command name, e.g. ``"globus-fs"``; it also names
-            the config directory and the environment variable prefix
+        :param name: the command name, e.g. ``"globus-fs"``; it is also the
+            SDK app name, which places the token file, and the environment
+            variable prefix
         :param forbidden_hint: advice appended to a 403 from the API
         :param login_check: optional callable ``(tool, app)`` run after a
             successful login to report what the new identity can do
@@ -71,115 +116,73 @@ class Tool:
         self.env = name.upper().replace("-", "_")
         self.forbidden_hint = forbidden_hint
         self.login_check = login_check
+        self._app = None
 
-    # ---- paths ----------------------------------------------------------
-    @property
-    def config_dir(self) -> str:
-        """The private directory holding this tool's config and tokens.
-
-        Read on every access so a test or wrapper can move it with
-        ``$<TOOL>_HOME``.
-
-        :returns: an absolute path, e.g. ``~/.globus-fs`` expanded
-        """
-        return os.path.expanduser(os.environ.get(f"{self.env}_HOME", f"~/.{self.name}"))
-
-    @property
-    def config_file(self) -> str:
-        """The saved configuration, currently just the client UUID.
-
-        :returns: the path of ``config.json``
-        """
-        return os.path.join(self.config_dir, "config.json")
-
-    @property
-    def token_file(self) -> str:
-        """The refresh token store.
-
-        :returns: the path of ``tokens.json``
-        """
-        return os.path.join(self.config_dir, "tokens.json")
-
-    # ---- config ---------------------------------------------------------
-    def load_config(self) -> dict:
-        """Read the saved configuration.
-
-        :returns: the config mapping, or an empty dict if missing or corrupt
-        """
-        try:
-            with open(self.config_file) as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return {}
-
-    def save_config(self, cfg: dict) -> None:
-        """Write the config file atomically, owner-readable only.
-
-        :param cfg: the configuration mapping to serialise
-        """
-        security.secure_directory(self.config_dir)
-        tmp = self.config_file + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(cfg, f, indent=2)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, self.config_file)
-
-    def get_client_id(self, override: str | None = None) -> str:
+    def get_client_id(self) -> str:
         """Resolve the Globus client UUID to authenticate as.
 
-        Precedence: explicit argument, then ``$<TOOL>_CLIENT_ID``, then the
-        saved config, then :data:`DEFAULT_CLIENT_ID`. The built-in default
-        is skipped when a client secret is set, since a secret only makes
-        sense with the service account registration it was issued for.
+        ``$<TOOL>_CLIENT_ID`` when set, else :data:`DEFAULT_CLIENT_ID`. The
+        built-in default is never used with a client secret, since a secret
+        only makes sense with the service account it was issued for.
 
-        :param override: a client UUID supplied on the command line
         :returns: the client UUID
         :raises SystemExit: if a secret is set without its own client UUID
         """
-        explicit = (
-            override
-            or os.environ.get(f"{self.env}_CLIENT_ID")
-            or self.load_config().get("client_id")
-        )
+        explicit = os.environ.get(f"{self.env}_CLIENT_ID")
         if explicit:
             return explicit
         if os.environ.get(f"{self.env}_CLIENT_SECRET"):
             sys.exit(SERVICE_ACCOUNT_HELP.format(name=self.name, env=self.env))
         return DEFAULT_CLIENT_ID
 
-    # ---- auth -----------------------------------------------------------
-    def build_app(
-        self, client_id: str | None = None, fix_permissions: bool = False
-    ) -> globus_sdk.GlobusApp:
-        """Build the GlobusApp that owns login and the token store.
+    # ---- the app --------------------------------------------------------
+    @property
+    def app(self) -> globus_sdk.GlobusApp:
+        """This tool's GlobusApp, built once per run.
 
-        The credential store is checked before it is touched. A refresh
-        token readable by other local users is treated the way ssh treats
-        an exposed private key: refuse, explain, and say how to fix it.
-
-        :param client_id: override for the configured Globus client UUID
-        :param fix_permissions: True to chmod paths this user owns rather
-            than refusing to run
         :returns: a ``ClientApp`` when a client secret is set, else a
             ``UserApp``
         """
-        cid = self.get_client_id(client_id)
-        try:
-            security.secure_directory(self.config_dir, fix=fix_permissions)
-            repaired = security.assert_secure(
-                self.config_dir,
-                self.token_file,
-                self.config_file,
-                fix=fix_permissions,
-            )
-        except security.InsecureCredentialStore as exc:
-            sys.exit(exc.banner(self.name))
-        for path in repaired:
-            print(f"tightened permissions on {path}", file=sys.stderr)
+        if self._app is None:
+            self._app = self._build_app()
+        return self._app
+
+    def _build_app(self) -> globus_sdk.GlobusApp:
+        """Build the app, checking the token file before the SDK reads it.
+
+        The SDK reads an existing token file as soon as the app is built, so
+        the check has to come first. Building the SDK's own JSON storage
+        here, rather than letting the app do it, is what yields the path to
+        check; the location is still the SDK default,
+        ``~/.globus/app/<client-id>/<app-name>/tokens.json``.
+
+        A consent the API asks for mid-command is handled by the SDK, which
+        runs the login flow and retries -- but only with a terminal to log
+        in from. Otherwise the error is reported instead (:meth:`api_error`).
+
+        :returns: the configured app
+        """
+        cid = self.get_client_id()
         config = GlobusAppConfig(
-            token_storage=JSONTokenStorage(self.token_file),
             request_refresh_tokens=True,
+            auto_redrive_gares=sys.stdin.isatty(),
+            login_flow_manager=StderrLoginFlowManager,
         )
+        security.ensure_globus_dir()
+        storage = JSONTokenStorage.for_globus_app(
+            client_id=cid,
+            app_name=self.name,
+            config=config,
+            namespace=STORAGE_NAMESPACE,
+        )
+        try:
+            warning = security.check_token_file(storage.filepath)
+        except security.UnsafeTokenFile as exc:
+            sys.exit(str(exc))
+        if warning:
+            print(f"warning: {warning}", file=sys.stderr)
+        config = dataclasses.replace(config, token_storage=storage)
+
         secret = os.environ.get(f"{self.env}_CLIENT_SECRET")
         if secret:
             return ClientApp(
@@ -193,25 +196,29 @@ class Tool:
             self.name, client_id=cid, scope_requirements=SCOPES, config=config
         )
 
-    def transfer_client(self, args) -> globus_sdk.TransferClient:
-        """Build a Transfer API client bound to the credential store.
+    @property
+    def token_file(self) -> str:
+        """Where the SDK keeps this tool's tokens.
 
-        :param args: parsed arguments, read for ``--client-id``
+        :returns: the token file path
+        """
+        return self.app.token_storage.token_storage.filepath
+
+    def transfer_client(self, args) -> globus_sdk.TransferClient:
+        """A Transfer API client on this tool's app.
+
+        :param args: parsed arguments, unused; kept so tests can stub it
         :returns: an authenticated ``TransferClient``
         """
-        return globus_sdk.TransferClient(
-            app=self.build_app(getattr(args, "client_id", None))
-        )
+        return globus_sdk.TransferClient(app=self.app)
 
     def auth_client(self, args) -> globus_sdk.AuthClient:
-        """Build an Auth API client, used to resolve usernames to identities.
+        """An Auth API client on this tool's app.
 
-        :param args: parsed arguments, read for ``--client-id``
+        :param args: parsed arguments, unused
         :returns: an authenticated ``AuthClient``
         """
-        return globus_sdk.AuthClient(
-            app=self.build_app(getattr(args, "client_id", None))
-        )
+        return globus_sdk.AuthClient(app=self.app)
 
     def api_error(self, e) -> None:
         """Turn a Globus API error into an actionable message and exit.
@@ -219,6 +226,13 @@ class Tool:
         :param e: the API error to explain
         :raises SystemExit: always
         """
+        if _is_gare(e):
+            sys.exit(
+                f"{e.code}: {e.message}\n\n"
+                "This needs you to log in again, or to consent to a collection.\n"
+                f"Run the same {self.name} command in an interactive terminal and "
+                "it will ask you to log in."
+            )
         if e.http_status == 403:
             sys.exit(f"Permission denied ({e.code}): {e.message}{self.forbidden_hint}")
         if e.http_status == 401:
@@ -229,36 +243,24 @@ class Tool:
 
     # ---- login / logout / whoami ----------------------------------------
     def cmd_login(self, args):
-        """Authenticate to Globus and store refresh tokens.
+        """Log in through the SDK's login flow and store refresh tokens.
 
         :param args: parsed arguments
         """
-        cid = self.get_client_id(args.client_id)
-        if args.client_id:
-            cfg = self.load_config()
-            cfg["client_id"] = args.client_id
-            self.save_config(cfg)
-        app = self.build_app(cid, fix_permissions=args.fix_permissions)
-        app.login(force=args.force)
-        # the SDK writes new token files under a user-only umask, but an
-        # existing one keeps whatever mode it already had
-        security.harden(self.token_file)
+        self.app.login(force=args.force)
         if self.login_check:
-            self.login_check(self, app)
+            self.login_check(self, self.app)
         else:
             print("Logged in.")
         print(f"Tokens stored in {self.token_file}")
 
     def cmd_logout(self, args):
-        """Delete the stored tokens.
+        """Revoke this tool's tokens with Globus and remove them.
 
         :param args: parsed arguments, unused
         """
-        try:
-            os.remove(self.token_file)
-            print(f"removed {self.token_file}")
-        except FileNotFoundError:
-            print(f"no tokens at {self.token_file}")
+        self.app.logout()
+        print(f"Logged out; tokens revoked and removed from {self.token_file}")
 
     def cmd_whoami(self, args):
         """Print the identity the stored tokens belong to.
@@ -282,16 +284,10 @@ class Tool:
         :param sub: the object returned by ``add_subparsers``
         """
         lo = sub.add_parser("login", help="authenticate to Globus")
-        lo.add_argument("--client-id", help="Globus client UUID (saved for next time)")
         lo.add_argument("--force", action="store_true", help="re-run the login flow")
-        lo.add_argument(
-            "--fix-permissions",
-            action="store_true",
-            help="chmod the credential store to owner-only instead of refusing",
-        )
         lo.set_defaults(func=self.cmd_login)
 
-        sub.add_parser("logout", help="forget stored tokens").set_defaults(
+        sub.add_parser("logout", help="revoke and remove stored tokens").set_defaults(
             func=self.cmd_logout
         )
 
@@ -335,7 +331,7 @@ class Tool:
 
 
 def add_common(p):
-    """Add the output and credential options shared by most commands.
+    """Add the output options shared by most commands.
 
     :param p: the parser to extend
     """
@@ -346,7 +342,6 @@ def add_common(p):
         help="output format (default: table)",
     )
     p.add_argument("--no-header", action="store_true", help="omit the header row")
-    p.add_argument("--client-id", help="Globus client UUID to authenticate as")
 
 
 def new_parser(prog, description, epilog):
@@ -452,3 +447,15 @@ def age_seconds(val):
     if dt is None:
         return None
     return (datetime.now(timezone.utc) - dt).total_seconds()
+
+
+def _is_gare(error) -> bool:
+    """Whether an API error asks for a new login or consent.
+
+    :param error: a Globus API error
+    :returns: True for a Globus Authorization Requirements Error
+    """
+    try:
+        return globus_sdk.gare.is_gare(error)
+    except (AttributeError, TypeError, ValueError):
+        return False

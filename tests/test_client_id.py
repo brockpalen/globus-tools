@@ -6,16 +6,14 @@ from globus_console_cli import common
 
 
 @pytest.fixture
-def tool(tmp_path, monkeypatch):
-    """A tool with an empty private config dir and no client env vars.
+def tool(monkeypatch):
+    """A tool with no client environment variables set.
 
-    :param tmp_path: pytest's per-test directory
     :param monkeypatch: pytest's monkeypatch fixture
     :returns: a :class:`common.Tool`
     """
-    for var in ("HOME", "CLIENT_ID", "CLIENT_SECRET"):
+    for var in ("CLIENT_ID", "CLIENT_SECRET"):
         monkeypatch.delenv(f"GLOBUS_FS_{var}", raising=False)
-    monkeypatch.setenv("GLOBUS_FS_HOME", str(tmp_path / "cfg"))
     return common.Tool("globus-fs")
 
 
@@ -24,13 +22,10 @@ def test_nothing_configured_uses_the_built_in_id(tool):
     assert tool.get_client_id() == common.DEFAULT_CLIENT_ID
 
 
-def test_every_override_beats_the_default(tool, monkeypatch):
-    """Saved config, then environment, then the command line win in turn."""
-    tool.save_config({"client_id": "saved"})
-    assert tool.get_client_id() == "saved"
+def test_environment_overrides_the_default(tool, monkeypatch):
+    """A site can use its own registration."""
     monkeypatch.setenv("GLOBUS_FS_CLIENT_ID", "from-env")
     assert tool.get_client_id() == "from-env"
-    assert tool.get_client_id("from-flag") == "from-flag"
 
 
 def test_a_secret_is_never_paired_with_the_published_id(tool, monkeypatch):

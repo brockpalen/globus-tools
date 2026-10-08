@@ -67,4 +67,3 @@ optional.
 | `GLOBUS_FS_ARCHIVESCAN_SIZE` | default for `archivescan --size`, e.g. `10M`; built-in default `100M` |
 | `GLOBUS_FS_CLIENT_ID`, `GLOBUS_CONSOLE_CLIENT_ID` | use your own Globus client registration instead of the built-in one |
 | `GLOBUS_CONSOLE_CLIENT_SECRET` | with `GLOBUS_CONSOLE_CLIENT_ID`, run `globus-console` unattended as a service account |
-| `GLOBUS_FS_HOME`, `GLOBUS_CONSOLE_HOME` | where tokens are kept; default `~/.globus-fs`, `~/.globus-console` |

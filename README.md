@@ -60,8 +60,8 @@ covers, and `globus-console login` reports the count.
 collection, bookmarks are yours, and `globus-fs tasks` / `history` read your
 own transfers through `GET /task_list`.
 
-The two tools keep **separate logins** (`~/.globus-fs/` and
-`~/.globus-console/`), so logging out of one leaves the other alone.
+The two tools keep **separate logins** (separate token files under
+`~/.globus/app/`), so logging out of one leaves the other alone.
 
 ## Setup
 
@@ -90,14 +90,13 @@ That is all a user does. Both tools ship a built-in Globus client ID
 (`6a4a00f5-cded-42a4-a2e9-f535af8fc5b0`, a "thick client" registration in
 the site's Globus project), the same way globus-cli and archivetar do. It
 is not a secret: it only names the application on the consent screen, and
-each user still authenticates as themselves. Refresh tokens are stored in
-the tool's directory (mode 0600), so you only log in once.
+each user still authenticates as themselves. globus-sdk stores the refresh
+token (mode 0600) where it keeps every SDK app's tokens, so you only log in
+once.
 
-To use a different registration, highest precedence first:
-`--client-id <UUID>` (saved to the tool's `config.json`), then
-`$GLOBUS_FS_CLIENT_ID` / `$GLOBUS_CONSOLE_CLIENT_ID`, then the saved
-config, then the built-in default. Keep a second administrator on the
-Globus project that owns the registration, so it outlives any one account.
+To use a different registration, set `GLOBUS_FS_CLIENT_ID` /
+`GLOBUS_CONSOLE_CLIENT_ID`. Keep a second administrator on the Globus
+project that owns the registration, so it outlives any one account.
 
 A site module then only needs the shortcuts:
 
@@ -131,7 +130,6 @@ client ID of its own, the tool refuses and says so.
 | `globus-fs archivescan` | how Data Den friendly a tree is: files over and under 100 MiB |
 | `globus-fs collections` | site-wide collection shortcuts |
 | `globus-fs bookmark` | your own shortcuts, shared with globus-cli |
-| `globus-fs consent` | unlock a GCS v5 mapped collection for listing |
 | `globus-fs tasks` / `watch` / `history` / `task` | your own transfers |
 | `globus-console` / `tasks` | in-progress transfers on collections you monitor |
 | `globus-console watch` | the same table, refreshed, with a live rate column |
@@ -214,55 +212,45 @@ the way user config beats `/etc` everywhere else;
 
 ## Credential security
 
-`~/.globus-fs/tokens.json` and `~/.globus-console/tokens.json` hold a Globus **refresh token** — a
-long-lived credential that can be exchanged for access tokens until it is
-revoked. On a shared login node or DTN, a readable token file lets any local
-user act as its owner, and for an activity monitor that means reading every
-transfer on the subscription.
-
-So the store is checked before it is touched, and the tool **refuses to run**
-on an exposed credential, the way `ssh` refuses an exposed private key:
+Login, token storage, refresh and logout are globus-sdk's (`UserApp` with
+its JSON token storage). Tokens are kept where the SDK keeps every app's:
 
 ```
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@           WARNING: UNPROTECTED GLOBUS CREDENTIAL FILE!           @
-@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-Permissions 0640 for '~/.globus-fs/tokens.json' are too open.
-...
-Refusing to run.
-
-Fix it with:
-    chmod 0600 ~/.globus-fs/tokens.json
+~/.globus/app/<client-id>/globus-fs/tokens.json
+~/.globus/app/<client-id>/globus-console/tokens.json
 ```
 
-What is enforced, on both the directory and every file in it:
+The file holds a Globus **refresh token**, a long-lived credential. On a
+shared login node a token file other users can read lets them act as its
+owner, so it is protected the same way archivetar protects its own
+([archivetar#49](https://github.com/brockpalen/archivetar/issues/49)):
 
-| check | why |
-| --- | --- |
-| no group or other permission bits (`0077`) | anything else exposes the token to local users |
-| owned by the current uid | never read or write another user's credentials |
-| not a symbolic link | a link could redirect the write, or point at a file someone else controls |
-| regular file / real directory | same |
+- **The file must be 600.** The SDK creates it that way. A file found with
+  any group or other access (an older tool, a copy, a stray `chmod`) is
+  tightened to 600 before the SDK reads it, with a warning:
 
-`globus-fs login --fix-permissions` (or `globus-console login --fix-permissions` repairs the modes of paths you own,
-instead of refusing. It never changes ownership, so a store owned by someone
-else still fails — as it should.
+  ```
+  warning: Permissions -rw-r--r-- for ~/.globus/app/.../tokens.json were too
+  open, changed to -rw-------.
+  ```
 
-Why this is not already handled: globus-sdk writes *new* token files under a
-user-only umask, but it does not repair a file that already exists with looser
-permissions, and `os.makedirs(..., exist_ok=True)` silently ignores its `mode`
-argument for a directory that is already there. Either path can leave a
-credential exposed with nothing complaining.
+- **A file owned by another user is refused**, since it cannot be fixed and
+  must not be used.
+- **The directory is not policed.** `~/.globus` is shared with globus-cli
+  (which creates it 775) and archivetar. It is created 700 if missing, and
+  otherwise left alone.
+
+`logout` asks Globus to **revoke** the tokens, not just delete the file.
 
 **Out of scope**, and worth knowing:
 
-- If `~` is on NFS, root on any client can read the token regardless of mode.
-  Consider `GLOBUS_FS_HOME` / `GLOBUS_CONSOLE_HOME` pointing at local disk on shared systems.
+- If `~` is on NFS, root on any NFS client can read the token regardless
+  of mode.
 - `GLOBUS_CONSOLE_CLIENT_SECRET` lives in the environment, so it is visible
   in `/proc/<pid>/environ` to you and to root. Prefer a systemd
   `EnvironmentFile` with mode `0600` over exporting it in a shell profile.
-- Revoke a leaked token at <https://app.globus.org/settings/consents>;
-  `chmod` alone does not invalidate anything already copied.
+- If a token file was readable by others, `chmod` does not invalidate a copy
+  already taken. Revoke at <https://app.globus.org/settings/consents>.
 
 ## Layout
 
@@ -340,3 +328,6 @@ since one API call per directory is the cost model users actually feel.
   Check with `globus-console --status ACTIVE,INACTIVE,SUCCEEDED,FAILED -e <uuid>`.
 - **`Not authenticated`** — `globus-fs login` or `globus-console login`
   (`--force` after changing scopes or roles).
+- **`ConsentRequired`** — a GCS v5 collection wants your consent. On a
+  terminal the tool asks you to log in and carries on; in a script or cron
+  job it stops instead. Run the same command once in a terminal.

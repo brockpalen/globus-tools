@@ -87,7 +87,6 @@ Accepted by most commands.
 | --- | --- |
 | `--format table\|tsv\|csv\|json` | output format; `table` by default |
 | `--no-header` | omit the header row |
-| `--client-id UUID` | authenticate as a different registered client |
 
 ## `ls` — list a directory
 
@@ -341,18 +340,13 @@ globus ls "$(globus-fs bookmark show projects)"
 
 A bookmark takes precedence over a collection shortcut of the same name.
 
-## `consent` — unlock a mapped collection
+## Consent for GCS v5 collections
 
-```sh
-globus-fs consent <collection-uuid>
-```
-
-GCS v5 mapped collections need a `data_access` consent before they can be
-listed. Run this once if `ls`, `find` or `du` fails with `ConsentRequired`.
-
-Does **not** apply to guest collections, GCP, or High Assurance collections —
-those use a different consent path and `data_access` on them fails with
-"Unknown Scope".
+Some GCS v5 mapped collections need your consent before they can be
+listed. There is no separate command: the first `ls`, `find`, `du` or
+`archivescan` on such a collection asks you to log in, then carries on.
+That only happens on a terminal; in a script or cron job the command stops
+and says so — run it once interactively.
 
 ## Your own transfers: `tasks`, `watch`, `history`, `task`
 
@@ -376,25 +370,21 @@ as a filter over your own tasks, and `history` does not require it.
 ## `login`, `logout`, `whoami`
 
 ```sh
-globus-fs login                       # uses the built-in client id
-globus-fs login --client-id <UUID>    # a different registration, saved
+globus-fs login                       # once
 globus-fs login --force               # re-run the flow
-globus-fs login --fix-permissions     # repair an exposed token store
 globus-fs whoami
-globus-fs logout
+globus-fs logout                      # revokes the tokens with Globus
 ```
 
 | option | |
 | --- | --- |
-| `--client-id UUID` | authenticate through a different registered client, and save it |
 | `--force` | run the login flow again |
-| `--fix-permissions` | chmod the credential store instead of refusing to run |
 
-The client ID resolves from `--client-id`, then `$GLOBUS_FS_CLIENT_ID`,
-then the saved config, then the built-in default — so normally you pass
-nothing. Tokens live in `~/.globus-fs/` (override with `$GLOBUS_FS_HOME`). The tool
-refuses to run if that directory or the token file inside it is readable by
-other users — see [credential security](README.md#credential-security).
+Tokens are kept by globus-sdk in
+`~/.globus/app/<client-id>/globus-fs/tokens.json`, mode 600. A token file
+other users can read is tightened to 600 with a warning — see
+[credential security](README.md#credential-security). Set
+`GLOBUS_FS_CLIENT_ID` to log in through a different client registration.
 
 ---
 
@@ -421,7 +411,7 @@ Who has those roles:
 - anyone with a role on an endpoint or mapped collection, which carries down
   to every guest collection beneath it
 
-Shared options (`--format`, `--no-header`, `--client-id`) are as for
+Shared options (`--format`, `--no-header`) are as for
 [globus-fs](#shared-options). Task listings (`tasks`, `watch`, `history`) add:
 
 | option | |
@@ -533,10 +523,11 @@ No options beyond the shared ones. Run this first if `tasks` returns
 
 ## Logging in
 
-`login`, `logout` and `whoami` take the same options as
+`login`, `logout` and `whoami` work as for
 [globus-fs](#login-logout-whoami), with `GLOBUS_CONSOLE_` in place of
-`GLOBUS_FS_` and tokens in `~/.globus-console/`. The two tools keep separate
-logins, so logging out of one leaves the other alone. After login,
+`GLOBUS_FS_` and tokens in `~/.globus/app/<client-id>/globus-console/`. The
+two tools keep separate logins, so logging out of one leaves the other
+alone. After login,
 `globus-console` reports how many collections the identity can monitor.
 
 For unattended use (cron, dashboards) set `GLOBUS_CONSOLE_CLIENT_ID` and

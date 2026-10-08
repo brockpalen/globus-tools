@@ -231,33 +231,3 @@ class Walker:
             and not entry.get("link_target")
             and entry.get("name") not in self.skip_names
         )
-
-
-# ---------------------------------------------------------------------------
-# consent
-# ---------------------------------------------------------------------------
-def needs_consent(err):
-    """Test whether an API error is asking for an extra consent.
-
-    :param err: the API error to inspect
-    :returns: ``(is_consent_required, required_scopes)``
-    """
-    info = getattr(err, "info", None)
-    cr = getattr(info, "consent_required", None)
-    return bool(cr), list(getattr(cr, "required_scopes", []) or [])
-
-
-def consent_hint(collection, scopes):
-    """Explain how to grant a collection's data_access consent.
-
-    :param collection: the collection that refused the listing
-    :param scopes: the scopes the server asked for, if it named any
-    :returns: a message to print to the user
-    """
-    return (
-        f"\nThis collection ({collection}) needs an additional consent before "
-        "it can be listed.\n"
-        "Grant it once with:\n\n"
-        f"    globus-fs consent {collection}\n\n"
-        + (f"(required scopes: {', '.join(scopes)})\n" if scopes else "")
-    )
