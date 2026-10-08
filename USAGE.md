@@ -43,41 +43,10 @@ shortcut**. A UUID is always taken literally.
 
 ## Collection shortcuts
 
-So that nobody has to look up a UUID for the collections everyone uses.
-
-### Where they are read from
-
-Later files win, so a user can override what an administrator ships:
-
-| path | for |
-| --- | --- |
-| `/etc/globus-fs/collections.conf` | everyone on the machine |
-| `$GLOBUS_FS_COLLECTIONS` | `:`-separated list of files, for Lmod |
-| `~/.globus/app/<client-id>/globus-fs/collections.conf` | one user's own additions, kept beside their tokens |
-
-```lua
--- in an Lmod module file
-setenv("GLOBUS_FS_COLLECTIONS", "/sw/arcts/globus/collections.conf")
-```
-
-### Format
-
-```ini
-# NAME = COLLECTION_UUID[:/optional/base/path]
-
-dataden = ab65757f-00f5-4e5b-aa21-133187732a01
-turbo   = 8e3a1e59-0000-0000-0000-000000000000
-scratch = 1a2b3c4d-0000-0000-0000-000000000000:/scratch
-```
-
-- `NAME: UUID` and bare `NAME UUID` also parse
-- `#` starts a comment; blank lines are ignored
-- a file beginning with `{` is read as a JSON object of the same pairs
-- a malformed line is **skipped, not fatal** — one typo must not break the
-  tool for everyone on a shared machine
-- names are typed on a command line, so no spaces and no colons
-
-A copy to start from: [`examples/collections.conf`](examples/collections.conf).
+Names such as `dataden` come from your Globus bookmarks and from
+`collections.conf` files; the file format and where they are read from are
+in the [README](README.md#collection-shortcuts). `globus-fs collections`
+lists what is configured here.
 
 ## Shared options
 
@@ -340,13 +309,17 @@ globus ls "$(globus-fs bookmark show projects)"
 
 A bookmark takes precedence over a collection shortcut of the same name.
 
-## Consent for GCS v5 collections
+## Consent and high assurance logins
 
-Some GCS v5 mapped collections need your consent before they can be
-listed. There is no separate command: the first `ls`, `find`, `du` or
-`archivescan` on such a collection asks you to log in, then carries on.
-That only happens on a terminal; in a script or cron job the command stops
-and says so — run it once interactively.
+There is no separate command. When a collection needs more than your
+current login — consent for a GCS v5 mapped collection, or a high assurance
+session that is new, expired or needs a particular identity (e.g.
+`umich.edu`) — `ls`, `find`, `du` and `archivescan` ask you to log in, then
+carry on. Parallel listings that all hit an expired session share one login.
+
+That needs a terminal. In a script or cron job the command stops and says
+so; run it once interactively. See
+[high assurance collections](README.md#high-assurance-collections-cui-phi).
 
 ## Your own transfers: `tasks`, `watch`, `history`, `task`
 

@@ -20,6 +20,11 @@ packaging/build-standalone.sh /sw/pkgs/globus-fs/0.2.0
 └── BUILD-INFO           version, commit, build date and target
 ```
 
+Build as the account that owns your software tree, with `umask 022`:
+every user runs this code with their own Globus tokens, so nothing in it
+may be writable by anyone else. Check with
+`find /sw/pkgs/globus-fs/0.2.0 -perm /022 ! -type l` (should print nothing).
+
 The script refuses to write into a non-empty directory, so build each
 version into its own. The tree is relocatable and runs read-only. The
 launchers run Python in isolated mode, so a user's `PYTHONPATH`,
@@ -63,7 +68,7 @@ optional.
 
 | variable | |
 | --- | --- |
-| `GLOBUS_FS_COLLECTIONS` | colon-separated collection shortcut files; see [USAGE.md](USAGE.md#collection-shortcuts) and [`examples/collections.conf`](examples/collections.conf). `/etc/globus-fs/collections.conf` is always read too |
+| `GLOBUS_FS_COLLECTIONS` | colon-separated collection shortcut files; format in the [README](README.md#collection-shortcuts). `/etc/globus-fs/collections.conf` is always read too |
 | `GLOBUS_FS_ARCHIVESCAN_SIZE` | default for `archivescan --size`, e.g. `10M`; built-in default `100M` |
 | `GLOBUS_FS_CLIENT_ID`, `GLOBUS_CONSOLE_CLIENT_ID` | use your own Globus client registration instead of the built-in one |
 | `GLOBUS_CONSOLE_CLIENT_SECRET` | with `GLOBUS_CONSOLE_CLIENT_ID`, run `globus-console` unattended as a service account |
