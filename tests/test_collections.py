@@ -49,7 +49,9 @@ def site(tmp_path, monkeypatch):
     path.write_text(SITE_FILE)
     monkeypatch.setenv(shortcuts.ENV_VAR, str(path))
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent.conf"))
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent.conf"))
+    monkeypatch.setattr(
+        fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent.conf")
+    )
     return str(path)
 
 
@@ -191,7 +193,7 @@ def test_collections_command_explains_when_none_are_configured(
     """An empty listing should say where to put the file."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
     monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
     assert "No collection shortcuts are configured" in out
@@ -204,7 +206,7 @@ def test_empty_state_lists_every_source_including_an_unset_env_var(
     """Showing the variable even when unset explains the mechanism exists."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
     monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
     assert shortcuts.ENV_VAR in out
@@ -223,7 +225,7 @@ def test_empty_state_shows_no_realistic_looking_shortcut(
     """
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
     monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
     run(["collections"])
     out = capsys.readouterr().out
     assert "<name> = <collection-uuid>" in out
@@ -237,7 +239,7 @@ def test_empty_state_points_at_bookmarks_for_a_single_user(
     """A user wanting one name should be sent to bookmarks, not a config file."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
     monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
     run(["collections"])
     assert "bookmark create" in capsys.readouterr().out
 
@@ -248,7 +250,7 @@ def test_unknown_name_says_when_no_shortcuts_are_configured(
     """Omitting the line silently leaves the reader guessing why."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
     monkeypatch.delenv(shortcuts.ENV_VAR, raising=False)
-    monkeypatch.setattr(fs, "SHORTCUT_FILE", str(tmp_path / "user-absent"))
+    monkeypatch.setattr(fs, "user_shortcut_file", lambda: str(tmp_path / "user-absent"))
     with pytest.raises(SystemExit) as caught:
         fs._resolve_target(Target("dataden"), client)
     message = str(caught.value)
@@ -271,7 +273,21 @@ def test_describe_sources_labels_each_one(tmp_path, monkeypatch):
     """The listing says what each location is for, not just its path."""
     monkeypatch.setattr(shortcuts, "DEFAULT_SITE_FILE", "/etc/x.conf")
     monkeypatch.setenv(shortcuts.ENV_VAR, "/from/module.conf")
-    rows = shortcuts.describe_sources("/home/u/.globus-fs/collections.conf")
+    rows = shortcuts.describe_sources(
+        "/home/u/.globus/app/x/globus-fs/collections.conf"
+    )
     assert rows[0] == ("/etc/x.conf", "site-wide, shipped by an administrator")
     assert rows[1][1] == f"from ${shortcuts.ENV_VAR}"
     assert rows[-1][1] == "yours"
+
+
+def test_user_file_sits_beside_the_token_file(tmp_path, monkeypatch):
+    """Everything per-user in one directory, like ~/.ssh."""
+    from globus_console_cli import common
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("GLOBUS_FS_CLIENT_ID", raising=False)
+    monkeypatch.setattr(fs, "TOOL", common.Tool("globus-fs"))
+    expected = tmp_path / ".globus/app" / common.DEFAULT_CLIENT_ID / "globus-fs"
+    assert fs.user_shortcut_file() == str(expected / "collections.conf")
+    assert os.path.dirname(fs.TOOL.token_file) == str(expected)

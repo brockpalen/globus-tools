@@ -61,9 +61,15 @@ def resolve_bookmark(tc, name_or_id):
     return None
 
 
-#: A user's own shortcuts. Not a credential -- tokens live where globus-sdk
-#: keeps them, under ~/.globus -- so this needs no special permissions.
-SHORTCUT_FILE = os.path.expanduser("~/.globus-fs/collections.conf")
+def user_shortcut_file():
+    """A user's own shortcuts, beside their tokens.
+
+    ``~/.globus/app/<client-id>/globus-fs/collections.conf``: one per-user
+    directory for everything, the way ``~/.ssh`` holds both keys and config.
+
+    :returns: the path, whether or not the file exists
+    """
+    return os.path.join(TOOL.config_dir, "collections.conf")
 
 
 def site_shortcuts():
@@ -71,7 +77,7 @@ def site_shortcuts():
 
     :returns: mapping of name to :class:`globus_collections.Shortcut`
     """
-    return globus_collections.load(SHORTCUT_FILE)
+    return globus_collections.load(user_shortcut_file())
 
 
 def _join_within(base, tail):
@@ -800,7 +806,7 @@ def _no_shortcuts_message():
 
     :returns: the message to print
     """
-    rows = globus_collections.describe_sources(SHORTCUT_FILE)
+    rows = globus_collections.describe_sources(user_shortcut_file())
     width = max(len(location) for location, _ in rows)
     lines = [
         "No collection shortcuts are configured on this system.",
@@ -1016,7 +1022,7 @@ collection shortcuts        (see: globus-fs collections)
   read from, later winning:
     /etc/globus-fs/collections.conf
     $GLOBUS_FS_COLLECTIONS      colon separated files, for Lmod
-    ~/.globus-fs/collections.conf
+    ~/.globus/app/<client-id>/globus-fs/collections.conf
   format:
     NAME = COLLECTION_UUID[:/base/path]       # also NAME: UUID, or NAME UUID
 
@@ -1034,7 +1040,8 @@ administrator ships them for everyone; a user can add their own.
 read from, later winning:
   /etc/globus-fs/collections.conf     everyone on this machine
   $GLOBUS_FS_COLLECTIONS              colon separated files, for Lmod
-  ~/.globus-fs/collections.conf       your own additions
+  ~/.globus/app/<client-id>/globus-fs/collections.conf
+                                            your own additions, beside your tokens
 
 format:
   # NAME = COLLECTION_UUID[:/optional/base/path]

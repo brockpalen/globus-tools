@@ -53,7 +53,7 @@ Later files win, so a user can override what an administrator ships:
 | --- | --- |
 | `/etc/globus-fs/collections.conf` | everyone on the machine |
 | `$GLOBUS_FS_COLLECTIONS` | `:`-separated list of files, for Lmod |
-| `~/.globus-fs/collections.conf` | one user's own additions |
+| `~/.globus/app/<client-id>/globus-fs/collections.conf` | one user's own additions, kept beside their tokens |
 
 ```lua
 -- in an Lmod module file

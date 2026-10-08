@@ -78,7 +78,7 @@ def test_readme_documents_every_shortcut_source():
     for source in (
         "/etc/globus-fs/collections.conf",
         "GLOBUS_FS_COLLECTIONS",
-        "~/.globus-fs/collections.conf",
+        "~/.globus/app/<client-id>/globus-fs/collections.conf",
     ):
         assert source in README, f"{source} is not in the README"
 

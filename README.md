@@ -192,7 +192,7 @@ Later files win, so a user can override what an administrator ships:
 | --- | --- |
 | `/etc/globus-fs/collections.conf` | everyone on the machine |
 | `$GLOBUS_FS_COLLECTIONS` | `:`-separated list of files, for Lmod |
-| `~/.globus-fs/collections.conf` | one user's own additions |
+| `~/.globus/app/<client-id>/globus-fs/collections.conf` | one user's own additions, kept beside their tokens |
 
 ```lua
 -- in an Lmod module file
@@ -236,6 +236,9 @@ owner, so it is protected the same way archivetar protects its own
 
 - **A file owned by another user is refused**, since it cannot be fixed and
   must not be used.
+- **One directory per tool.** `~/.globus/app/<client-id>/globus-fs/` holds
+  both the token file and your own `collections.conf`, the way `~/.ssh`
+  holds keys and `config`. Only the token file is a secret.
 - **The directory is not policed.** `~/.globus` is shared with globus-cli
   (which creates it 775) and archivetar. It is created 700 if missing, and
   otherwise left alone.

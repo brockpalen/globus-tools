@@ -117,6 +117,8 @@ class Tool:
         self.forbidden_hint = forbidden_hint
         self.login_check = login_check
         self._app = None
+        self._config = None
+        self._storage = None
 
     def get_client_id(self) -> str:
         """Resolve the Globus client UUID to authenticate as.
@@ -147,42 +149,79 @@ class Tool:
             self._app = self._build_app()
         return self._app
 
-    def _build_app(self) -> globus_sdk.GlobusApp:
-        """Build the app, checking the token file before the SDK reads it.
-
-        The SDK reads an existing token file as soon as the app is built, so
-        the check has to come first. Building the SDK's own JSON storage
-        here, rather than letting the app do it, is what yields the path to
-        check; the location is still the SDK default,
-        ``~/.globus/app/<client-id>/<app-name>/tokens.json``.
+    @property
+    def config(self) -> GlobusAppConfig:
+        """This tool's GlobusApp configuration.
 
         A consent the API asks for mid-command is handled by the SDK, which
         runs the login flow and retries -- but only with a terminal to log
         in from. Otherwise the error is reported instead (:meth:`api_error`).
 
-        :returns: the configured app
+        :returns: the configuration, without token storage yet
         """
-        cid = self.get_client_id()
-        config = GlobusAppConfig(
-            request_refresh_tokens=True,
-            auto_redrive_gares=sys.stdin.isatty(),
-            login_flow_manager=StderrLoginFlowManager,
-        )
-        security.ensure_globus_dir()
-        storage = JSONTokenStorage.for_globus_app(
-            client_id=cid,
-            app_name=self.name,
-            config=config,
-            namespace=STORAGE_NAMESPACE,
-        )
+        if self._config is None:
+            self._config = GlobusAppConfig(
+                request_refresh_tokens=True,
+                auto_redrive_gares=sys.stdin.isatty(),
+                login_flow_manager=StderrLoginFlowManager,
+            )
+        return self._config
+
+    @property
+    def storage(self) -> JSONTokenStorage:
+        """The SDK's JSON token storage, at the SDK's default location.
+
+        Built here, rather than left to the app, because the app reads the
+        file as soon as it is constructed: owning the storage is what gives
+        the path to check first. The location is unchanged,
+        ``~/.globus/app/<client-id>/<app-name>/tokens.json``.
+
+        :returns: the storage, with ``~/.globus`` created 700 if it was missing
+        """
+        if self._storage is None:
+            security.ensure_globus_dir()
+            self._storage = JSONTokenStorage.for_globus_app(
+                client_id=self.get_client_id(),
+                app_name=self.name,
+                config=self.config,
+                namespace=STORAGE_NAMESPACE,
+            )
+        return self._storage
+
+    @property
+    def token_file(self) -> str:
+        """Where the SDK keeps this tool's tokens.
+
+        :returns: the token file path
+        """
+        return self.storage.filepath
+
+    @property
+    def config_dir(self) -> str:
+        """This tool's own directory: its tokens and the user's config.
+
+        Everything per-user lives together, the way ``~/.ssh`` holds both
+        keys and ``config``.
+
+        :returns: ``~/.globus/app/<client-id>/<app-name>``
+        """
+        return os.path.dirname(self.token_file)
+
+    def _build_app(self) -> globus_sdk.GlobusApp:
+        """Build the app, checking the token file before the SDK reads it.
+
+        :returns: a ``ClientApp`` when a client secret is set, else a
+            ``UserApp``
+        """
         try:
-            warning = security.check_token_file(storage.filepath)
+            warning = security.check_token_file(self.token_file)
         except security.UnsafeTokenFile as exc:
             sys.exit(str(exc))
         if warning:
             print(f"warning: {warning}", file=sys.stderr)
-        config = dataclasses.replace(config, token_storage=storage)
+        config = dataclasses.replace(self.config, token_storage=self.storage)
 
+        cid = self.get_client_id()
         secret = os.environ.get(f"{self.env}_CLIENT_SECRET")
         if secret:
             return ClientApp(
@@ -195,14 +234,6 @@ class Tool:
         return UserApp(
             self.name, client_id=cid, scope_requirements=SCOPES, config=config
         )
-
-    @property
-    def token_file(self) -> str:
-        """Where the SDK keeps this tool's tokens.
-
-        :returns: the token file path
-        """
-        return self.app.token_storage.token_storage.filepath
 
     def transfer_client(self, args) -> globus_sdk.TransferClient:
         """A Transfer API client on this tool's app.
