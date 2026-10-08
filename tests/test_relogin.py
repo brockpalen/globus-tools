@@ -208,3 +208,15 @@ def test_refused_after_login_names_the_identity_to_use(tool, capsys):
         tool.api_error(ha_session_error())
     assert "umich.edu" in str(exc.value)
     assert "interactive terminal" not in str(exc.value)
+
+
+@pytest.mark.parametrize("domain", ["example.edu", "uni.ac.uk"])
+def test_required_domain_comes_from_the_collection_not_the_code(tool, domain):
+    """Portable: whatever domain a collection's policy names is what we ask for."""
+    tool.call(failing_once(ha_session_error(domain)))
+    (params,) = tool.app.logins
+    assert params.session_required_single_domain == [domain]
+    with pytest.raises(SystemExit) as exc:
+        tool.api_error(ha_session_error(domain))
+    assert domain in str(exc.value)
+    assert "umich" not in str(exc.value)

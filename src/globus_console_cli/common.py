@@ -281,11 +281,12 @@ class Tool:
         if gare is None or not sys.stdin.isatty():
             return False
         params = gare.authorization_parameters
-        # Always sign in afresh, as globus-cli does. Without this, a browser
-        # that already has a session with the required identity is accepted
-        # as is -- and a high assurance collection rejects it again when
-        # that sign-in is older than its timeout (seen: umich.edu signed in
-        # 11 hours earlier, so the login "succeeded" and the retry failed).
+        # Everything the login must satisfy (domain, identities, MFA) comes
+        # from the collection's own error; we only add a fresh sign-in, as
+        # globus-cli does. Without it, a browser that already has a session
+        # with the required identity is accepted as is -- and a high
+        # assurance collection rejects it again when that sign-in is older
+        # than its timeout.
         params.prompt = "login"
         with self._login_lock:
             if self._logins == seen:

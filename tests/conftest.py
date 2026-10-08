@@ -313,12 +313,13 @@ def run_console(monkeypatch):
     return _runner(monkeypatch, console.main)
 
 
-def ha_session_error():
+def ha_session_error(domain="umich.edu"):
     """The error a high assurance collection returns for a wrong session.
 
     Shaped exactly like the real one from a UMich sensitive collection: a
     502, not a 403, carrying the login requirements.
 
+    :param domain: the identity domain the collection's policy requires
     :returns: a :class:`FakeAPIError`
     """
     return FakeAPIError(
@@ -332,7 +333,7 @@ def ha_session_error():
                 "session_message": "Session reauthentication required",
                 "session_required_identities": [],
                 "session_required_mfa": False,
-                "session_required_single_domain": ["umich.edu"],
+                "session_required_single_domain": [domain],
             },
         },
     )
