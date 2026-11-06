@@ -8,12 +8,16 @@ Requires [uv](https://docs.astral.sh/uv/) on the build host only.
 
 ## Build
 
+Build from a release tag, so the tree matches a known version:
+
 ```sh
-packaging/build-standalone.sh /sw/pkgs/globus-fs/0.2.0
+git clone https://github.com/brockpalen/globus-tools && cd globus-tools
+git checkout v0.2.1
+packaging/build-standalone.sh /sw/pkgs/globus-tools/0.2.1
 ```
 
 ```
-/sw/pkgs/globus-fs/0.2.0/
+/sw/pkgs/globus-tools/0.2.1/
 ├── bin/globus-fs        put this directory on PATH
 ├── bin/globus-console
 ├── python/              private Python and dependencies
@@ -38,7 +42,7 @@ launchers run Python in isolated mode, so a user's `PYTHONPATH`,
 | `ARCH` | build host | `x86_64` or `aarch64` |
 
 ```sh
-GLIBC=2.34 packaging/build-standalone.sh /sw/pkgs/globus-fs/0.2.0
+GLIBC=2.34 packaging/build-standalone.sh /sw/pkgs/globus-tools/0.2.1
 ```
 
 Set `GLIBC` to your oldest target system, not the build host: compiled
