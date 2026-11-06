@@ -32,19 +32,28 @@ TASK_ID   STATUS    ISSUE                OWNER            RATE      FILES  BYTES
 
 ## Try it
 
-Needs [uv](https://docs.astral.sh/uv/getting-started/installation/)
-(`curl -LsSf https://astral.sh/uv/install.sh | sh`):
+With [pipx](https://pipx.pypa.io/), as Globus recommends for globus-cli,
+or [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
+pipx install git+https://github.com/brockpalen/globus-tools
+# or
 uv tool install git+https://github.com/brockpalen/globus-tools
+
 globus-fs login
 globus-fs ls <collection-uuid>:/
 ```
 
-It gets its own Python environment, and ignores `PYTHONPATH`, so it
-works beside other modules (globus-cli included) and leaves your own
-Python packages alone. `uv tool upgrade globus-tools` picks up changes. Please report problems,
-and what you tried, as
+To pick up changes: `pipx reinstall globus-tools` (`pipx upgrade` misses
+new commits) or `uv tool upgrade globus-tools`.
+
+Either way it gets its own Python environment and ignores `PYTHONPATH`,
+so it works beside other modules (globus-cli included) and leaves your
+own Python packages alone. A current pipx needs Python 3.11 or later
+(RHEL 8's `python3` is 3.6); uv is a single program and fetches a
+Python itself if needed.
+
+Please report problems, and what you tried, as
 [GitHub issues](https://github.com/brockpalen/globus-tools/issues).
 
 Every command and option, with examples: **[USAGE.md](USAGE.md)**.
