@@ -10,7 +10,10 @@ Every commit runs isort, black, flake8, bandit, pytest and a `uv.lock`
 check (`.pre-commit-config.yaml`). GitHub runs the same hooks, plus the
 tests on Python 3.9 and 3.13, for every push and pull request
 (`.github/workflows/checks.yml`), so a commit made without the hooks is
-still caught.
+still caught. CI also builds the standalone tree on x86_64 and aarch64,
+runs `packaging/verify-standalone.sh`, starts it on AlmaLinux 8 (glibc
+2.28) as an unprivileged user, and keeps each tarball for 14 days under
+the run's **Artifacts**, for trying a change on a test system.
 
 `tox.ini` holds the flake8, isort and pytest settings and `.bandit` the
 bandit exclusions, matching archivetar. Every module, class, function and
@@ -30,6 +33,7 @@ src/globus_tools/
     walk.py         the parallel directory walker
     _launch.py      entry points; re-run without PYTHONPATH (stdlib only)
 packaging/build-standalone.sh    see INSTALL.md
+packaging/verify-standalone.sh   checks a built tree
 ```
 
 Which API fills the task table is fixed by the tool that registers the

@@ -16,12 +16,13 @@
 #   PYTHON_VERSION  interpreter to bundle            (default 3.12)
 #   GLIBC           oldest glibc the install must run on; compiled
 #                   dependencies are chosen to match  (default 2.28, RHEL 8)
-#   ARCH            target architecture               (default: this host)
+#
+# Build on the architecture you are targeting (x86_64, or aarch64 for Grace
+# and Vera): the bundled interpreter is always this host's.
 set -eu
 
 PYTHON_VERSION=${PYTHON_VERSION:-3.12}
 GLIBC=${GLIBC:-2.28}
-ARCH=${ARCH:-$(uname -m)}
 
 die() {
     echo "build-standalone: $*" >&2
@@ -29,6 +30,14 @@ die() {
 }
 
 [ $# -eq 1 ] || die "usage: $0 PREFIX"
+host_arch=$(uname -m)
+[ -z "${ARCH:-}" ] || [ "$ARCH" = "$host_arch" ] ||
+    die "ARCH=$ARCH, but this host is $host_arch; build on that architecture"
+ARCH=$host_arch
+case $ARCH in
+    x86_64 | aarch64) ;;
+    *) die "unsupported architecture $ARCH (x86_64 or aarch64)" ;;
+esac
 PREFIX=$1
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 

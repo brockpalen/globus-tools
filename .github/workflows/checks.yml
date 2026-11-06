@@ -1,6 +1,7 @@
 # The same checks as the pre-commit hooks, run for every push and pull
 # request, so nothing depends on a contributor having run
-# `pre-commit install` (or not using --no-verify).
+# `pre-commit install` (or not using --no-verify); plus the standalone
+# build on x86_64 and aarch64, so a change cannot break INSTALL.md unseen.
 name: checks
 
 on:
@@ -39,3 +40,53 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
       - run: uv run --locked --python ${{ matrix.python }} pytest -q --no-cov
+
+  standalone:
+    # Built natively on each architecture: the bundled interpreter is always
+    # the build host's. aarch64 covers NVIDIA Grace and Vera systems.
+    name: standalone build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: build
+        run: |
+          packaging/build-standalone.sh "$RUNNER_TEMP/build/globus-tools"
+          version=$(sed -n '1s/^globus-tools //p' "$RUNNER_TEMP/build/globus-tools/BUILD-INFO")
+          tree="$RUNNER_TEMP/build/globus-tools-$version-${{ matrix.arch }}"
+          mv "$RUNNER_TEMP/build/globus-tools" "$tree"
+          echo "TREE=$tree" >> "$GITHUB_ENV"
+      - name: verify
+        run: packaging/verify-standalone.sh "$TREE"
+      - name: run on glibc 2.28 (AlmaLinux 8, as RHEL 8) as an unprivileged user
+        run: |
+          docker run --rm --user 65534:65534 --network none \
+            -v "$TREE:/opt/globus-tools:ro" \
+            almalinux:8@sha256:2d0f2eb2a83cc09dbc2eb92fade4dbe8f709628149e81aa00aec70630406603b \
+            sh -ec '
+              /opt/globus-tools/bin/globus-fs --help >/dev/null
+              /opt/globus-tools/bin/globus-console --help >/dev/null
+              ldd --version | head -1
+              cat /opt/globus-tools/BUILD-INFO'
+      - name: package
+        run: |
+          tar -C "$(dirname "$TREE")" -czf "$(basename "$TREE").tar.gz" "$(basename "$TREE")"
+          echo "TARBALL=$(basename "$TREE").tar.gz" >> "$GITHUB_ENV"
+      # For trying a build on a test system; releases are still built by
+      # each site from a tag (INSTALL.md).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: ${{ env.TARBALL }}
+          path: ${{ env.TARBALL }}
+          retention-days: 14
+          if-no-files-found: error
