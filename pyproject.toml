@@ -28,8 +28,8 @@ dev = [
 ]
 
 [project.scripts]
-globus-console = "globus_tools.console:main"
-globus-fs = "globus_tools.fs:main"
+globus-console = "globus_tools._launch:console"
+globus-fs = "globus_tools._launch:fs"
 
 [tool.setuptools.dynamic]
 version = { attr = "globus_tools.__version__" }

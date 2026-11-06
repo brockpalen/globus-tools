@@ -28,6 +28,7 @@ src/globus_tools/
     security.py     token file and directory permissions
     shortcuts.py    collections.conf parsing
     walk.py         the parallel directory walker
+    _launch.py      entry points; re-run without PYTHONPATH (stdlib only)
 packaging/build-standalone.sh    see INSTALL.md
 ```
 
@@ -46,6 +47,7 @@ fixture drives `globus-fs`, `run_console` drives `globus-console`.
 | `test_security.py` | token file and directory permissions, the stderr login prompt |
 | `test_relogin.py` | re-login for consent and high assurance (the 502 case), one login across threads |
 | `test_client_id.py` | client ID resolution |
+| `test_launch.py` | a foreign `globus_sdk` on `PYTHONPATH` cannot replace ours |
 | `test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
 | `test_archivescan.py` | the size split, env default, snapshot and symlink skipping |
 | `test_batch.py` | `find --batch` round-trips through globus-cli's batch parser |

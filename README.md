@@ -41,7 +41,9 @@ globus-fs login
 globus-fs ls <collection-uuid>:/
 ```
 
-`uv tool upgrade globus-tools` picks up changes. Please report problems,
+It gets its own Python environment, and ignores `PYTHONPATH`, so it
+works beside other modules (globus-cli included) and leaves your own
+Python packages alone. `uv tool upgrade globus-tools` picks up changes. Please report problems,
 and what you tried, as
 [GitHub issues](https://github.com/brockpalen/globus-tools/issues).
 

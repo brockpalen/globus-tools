@@ -31,7 +31,11 @@ try:
     from globus_sdk.scopes import AuthScopes, TransferScopes
     from globus_sdk.token_storage import JSONTokenStorage
 except ImportError as exc:  # pragma: no cover
-    sys.exit(f"globus-sdk 4 is required ({exc}). Run:  pip install -U globus-sdk")
+    sys.exit(
+        f"globus-tools needs globus-sdk 4, but Python found another ({exc}).\n"
+        "If a module such as globus-cli set PYTHONPATH, unload it or run\n"
+        "  env -u PYTHONPATH <command>"
+    )
 
 from . import security
 
