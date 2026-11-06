@@ -39,6 +39,11 @@ Build on the architecture you are installing for: `x86_64`, or `aarch64`
 for NVIDIA Grace and Vera nodes. The bundled Python is always the build
 host's, so the script refuses to cross-build.
 
+The tree depends on the glibc version, not the distribution: the default
+target, 2.28, runs on RHEL 8 and later (Rocky, Alma), SLES 15 SP3 and
+later (including HPE Cray OS) and Ubuntu 20.04 and later. CI tests every
+build on Rocky 8, Rocky 10 and openSUSE Leap 15.6, and on Ubuntu 24.04.
+
 ### Build variables
 
 | variable | default | |

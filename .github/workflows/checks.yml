@@ -68,16 +68,27 @@ jobs:
           echo "TREE=$tree" >> "$GITHUB_ENV"
       - name: verify
         run: packaging/verify-standalone.sh "$TREE"
-      - name: run on glibc 2.28 (AlmaLinux 8, as RHEL 8) as an unprivileged user
+      # glibc is what matters, not the distribution: Rocky 8 is the oldest
+      # supported (2.28, as RHEL 8), Rocky 10 the newest RHEL, and Leap 15.6
+      # the SUSE family that HPE Cray OS is built on. Ubuntu 24.04 is the
+      # runner itself, covered by verify above. Images are pinned to their
+      # multi-architecture digests.
+      - name: run on Rocky 8, Rocky 10 and openSUSE Leap 15.6
         run: |
-          docker run --rm --user 65534:65534 --network none \
-            -v "$TREE:/opt/globus-tools:ro" \
-            almalinux:8@sha256:2d0f2eb2a83cc09dbc2eb92fade4dbe8f709628149e81aa00aec70630406603b \
-            sh -ec '
-              /opt/globus-tools/bin/globus-fs --help >/dev/null
-              /opt/globus-tools/bin/globus-console --help >/dev/null
-              ldd --version | head -1
-              cat /opt/globus-tools/BUILD-INFO'
+          for image in \
+            rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6 \
+            rockylinux/rockylinux:10@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834 \
+            opensuse/leap:15.6@sha256:79be7751205ea84559990fb76b1bec71e38d6fad41c70a4f6c921b803b58f421
+          do
+            echo "== ${image%%@*}"
+            # unprivileged, read-only, no network
+            docker run --rm --user 65534:65534 --network none \
+              -v "$TREE:/opt/globus-tools:ro" "$image" \
+              sh -ec '
+                /opt/globus-tools/bin/globus-fs --help >/dev/null
+                /opt/globus-tools/bin/globus-console --help >/dev/null
+                ldd --version | head -1'
+          done
       - name: package
         run: |
           tar -C "$(dirname "$TREE")" -czf "$(basename "$TREE").tar.gz" "$(basename "$TREE")"
