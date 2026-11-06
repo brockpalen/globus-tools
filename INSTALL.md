@@ -14,6 +14,7 @@ Build from a release tag, so the tree matches a known version:
 git clone https://github.com/brockpalen/globus-tools && cd globus-tools
 git checkout v0.2.1
 packaging/build-standalone.sh /sw/pkgs/globus-tools/0.2.1
+packaging/verify-standalone.sh /sw/pkgs/globus-tools/0.2.1
 ```
 
 ```
@@ -31,7 +32,17 @@ write permission from the whole tree, and fails if any remains.
 The script refuses to write into a non-empty directory, so build each
 version into its own. The tree is relocatable and runs read-only. The
 launchers run Python in isolated mode, so a user's `PYTHONPATH`,
-`~/.local` or loaded modules cannot interfere.
+`~/.local` or loaded modules cannot interfere. `verify-standalone.sh`
+checks all of this, and the glibc requirement, on the finished tree.
+
+Build on the architecture you are installing for: `x86_64`, or `aarch64`
+for NVIDIA Grace and Vera nodes. The bundled Python is always the build
+host's, so the script refuses to cross-build.
+
+The tree depends on the glibc version, not the distribution: the default
+target, 2.28, runs on RHEL 8 and later (Rocky, Alma), SLES 15 SP3 and
+later (including HPE Cray OS) and Ubuntu 20.04 and later. CI tests every
+build on Rocky 8, Rocky 10 and openSUSE Leap 15.6, and on Ubuntu 24.04.
 
 ### Build variables
 
@@ -39,7 +50,6 @@ launchers run Python in isolated mode, so a user's `PYTHONPATH`,
 | --- | --- | --- |
 | `GLIBC` | `2.28` | oldest glibc the install must run on (`ldd --version`); 2.28 is RHEL 8 |
 | `PYTHON_VERSION` | `3.12` | bundled interpreter |
-| `ARCH` | build host | `x86_64` or `aarch64` |
 
 ```sh
 GLIBC=2.34 packaging/build-standalone.sh /sw/pkgs/globus-tools/0.2.1

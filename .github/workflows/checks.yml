@@ -1,6 +1,7 @@
 # The same checks as the pre-commit hooks, run for every push and pull
 # request, so nothing depends on a contributor having run
-# `pre-commit install` (or not using --no-verify).
+# `pre-commit install` (or not using --no-verify); plus the standalone
+# build on x86_64 and aarch64, so a change cannot break INSTALL.md unseen.
 name: checks
 
 on:
@@ -39,3 +40,64 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
       - run: uv run --locked --python ${{ matrix.python }} pytest -q --no-cov
+
+  standalone:
+    # Built natively on each architecture: the bundled interpreter is always
+    # the build host's. aarch64 covers NVIDIA Grace and Vera systems.
+    name: standalone build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      - name: build
+        run: |
+          packaging/build-standalone.sh "$RUNNER_TEMP/build/globus-tools"
+          version=$(sed -n '1s/^globus-tools //p' "$RUNNER_TEMP/build/globus-tools/BUILD-INFO")
+          tree="$RUNNER_TEMP/build/globus-tools-$version-${{ matrix.arch }}"
+          mv "$RUNNER_TEMP/build/globus-tools" "$tree"
+          echo "TREE=$tree" >> "$GITHUB_ENV"
+      - name: verify
+        run: packaging/verify-standalone.sh "$TREE"
+      # glibc is what matters, not the distribution: Rocky 8 is the oldest
+      # supported (2.28, as RHEL 8), Rocky 10 the newest RHEL, and Leap 15.6
+      # the SUSE family that HPE Cray OS is built on. Ubuntu 24.04 is the
+      # runner itself, covered by verify above. Images are pinned to their
+      # multi-architecture digests.
+      - name: run on Rocky 8, Rocky 10 and openSUSE Leap 15.6
+        run: |
+          for image in \
+            rockylinux/rockylinux:8.10@sha256:e8a49c5403b687db05d4d67333fa45808fbe74f36e683cec7abb1f7d0f2338c6 \
+            rockylinux/rockylinux:10@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834 \
+            opensuse/leap:15.6@sha256:79be7751205ea84559990fb76b1bec71e38d6fad41c70a4f6c921b803b58f421
+          do
+            echo "== ${image%%@*}"
+            # unprivileged, read-only, no network
+            docker run --rm --user 65534:65534 --network none \
+              -v "$TREE:/opt/globus-tools:ro" "$image" \
+              sh -ec '
+                /opt/globus-tools/bin/globus-fs --help >/dev/null
+                /opt/globus-tools/bin/globus-console --help >/dev/null
+                ldd --version | head -1'
+          done
+      - name: package
+        run: |
+          tar -C "$(dirname "$TREE")" -czf "$(basename "$TREE").tar.gz" "$(basename "$TREE")"
+          echo "TARBALL=$(basename "$TREE").tar.gz" >> "$GITHUB_ENV"
+      # For trying a build on a test system; releases are still built by
+      # each site from a tag (INSTALL.md).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: ${{ env.TARBALL }}
+          path: ${{ env.TARBALL }}
+          retention-days: 14
+          if-no-files-found: error
