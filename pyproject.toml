@@ -9,7 +9,13 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
-dependencies = ["globus-sdk>=4,<5", "humanfriendly>=10"]
+dependencies = [
+    "globus-sdk>=4.10,<5",
+    # The CA bundle before 2026.10.19 trusts the compromised eMudhra emSign
+    # CAs; globus-sdk 4.10 requires this too, stated here so it stays.
+    "certifi>=2026.10.19",
+    "humanfriendly>=10",
+]
 dynamic = ["version"]
 
 # Development tools, installed by `uv sync` and never into the standalone
