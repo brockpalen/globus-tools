@@ -1209,7 +1209,10 @@ paths
 
 commands
   ls stat find du archivescan    as globus-fs, paths relative to here
-  cd pwd                         move around; pwd prints UUID:/path
+  cd                             move around
+  pwd [-u | -v]                  name:path to paste back into cd or globus-fs;
+                                 -u UUID:/path for globus-cli; -v both, and
+                                 the collection's display name
   collections bookmark tasks task watch history whoami
   lcd lpwd                       the local directory, for > and >>
   !command                       run any local command

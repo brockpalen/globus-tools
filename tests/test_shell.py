@@ -11,7 +11,7 @@ import os
 import stat
 
 import pytest
-from conftest import COLLECTION
+from conftest import COLLECTION, DISPLAY_NAME
 
 from globus_tools import common, fs, shell
 from globus_tools.shell import GlobusShell, ShellError, check_filter, split_line
@@ -75,7 +75,7 @@ def test_cd_alone_returns_to_where_the_collection_was_entered(at_data):
 def test_cd_by_uuid(sh):
     """UUID:/path switches collection directly."""
     sh.onecmd(f"cd {COLLECTION}:/data/project-b")
-    assert sh.here == (COLLECTION, "/data/project-b", COLLECTION[:8])
+    assert sh.here == (COLLECTION, "/data/project-b", None)
 
 
 def test_cd_to_a_file_is_refused(at_data, capsys):
@@ -91,7 +91,7 @@ def test_cd_to_a_missing_directory_reports_and_carries_on(at_data, capsys):
     at_data.onecmd("cd nowhere")
     assert "no such path" in capsys.readouterr().err
     at_data.onecmd("pwd")
-    assert capsys.readouterr().out == f"{COLLECTION}:/data\n"
+    assert capsys.readouterr().out == "projects:\n"
 
 
 def test_never_above_the_root(at_data):
@@ -156,7 +156,7 @@ def test_a_bad_option_does_not_end_the_shell(at_data, capsys):
     at_data.onecmd("ls --no-such-option")
     assert at_data.status == 2 or at_data.status == 1
     at_data.onecmd("pwd")
-    assert capsys.readouterr().out.endswith(f"{COLLECTION}:/data\n")
+    assert capsys.readouterr().out.endswith("projects:\n")
 
 
 def test_help_for_one_command(at_data, capsys):
@@ -301,7 +301,7 @@ def test_redirect_never_overwrites(at_data, tmp_path, monkeypatch, capsys):
     assert "never overwrites" in capsys.readouterr().err
     assert (tmp_path / "keep.txt").read_text() == "precious\n"
     at_data.onecmd("pwd >> keep.txt")
-    assert (tmp_path / "keep.txt").read_text() == f"precious\n{COLLECTION}:/data\n"
+    assert (tmp_path / "keep.txt").read_text() == "precious\nprojects:\n"
 
 
 def test_pipe_then_redirect(at_data, tmp_path, monkeypatch):
@@ -423,3 +423,107 @@ def test_an_unexpected_error_does_not_end_the_shell(at_data, monkeypatch, capsys
     at_data.onecmd("ls")
     assert "internal error, please report" in capsys.readouterr().err
     assert at_data.status == 1
+
+
+# ---- pwd and the prompt: names for humans, UUIDs for globus-cli -----------
+def test_pwd_prints_the_name_form(at_data, capsys):
+    """name:path, relative to the bookmark's base, so it pastes back."""
+    at_data.onecmd("cd project-a/sub1")
+    at_data.onecmd("pwd")
+    assert capsys.readouterr().out == "projects:project-a/sub1\n"
+
+
+def test_pwd_name_form_round_trips(at_data, capsys):
+    """Whatever pwd prints, cd takes back to the same place."""
+    at_data.onecmd("cd project-a/sub1")
+    at_data.onecmd("pwd")
+    printed = capsys.readouterr().out.strip()
+    at_data.onecmd("cd /")
+    at_data.onecmd(f"cd {printed}")
+    assert at_data.here[:2] == (COLLECTION, "/data/project-a/sub1")
+
+
+def test_pwd_u_prints_the_uuid_form(at_data, capsys):
+    """-u: what globus-cli and the web app take."""
+    at_data.onecmd("pwd -u")
+    assert capsys.readouterr().out == f"{COLLECTION}:/data\n"
+
+
+def test_pwd_v_shows_every_form(at_data, capsys):
+    """-v: the name form, the display name and the UUID form."""
+    at_data.onecmd("pwd -v")
+    out = capsys.readouterr().out
+    assert "projects:" in out and DISPLAY_NAME in out and f"{COLLECTION}:/data" in out
+
+
+def test_pwd_rejects_other_options(at_data, capsys):
+    """Only -u and -v."""
+    at_data.onecmd("pwd -x")
+    assert "usage: pwd" in capsys.readouterr().err
+
+
+def test_outside_the_entered_bookmark_another_name_is_used(at_data, capsys):
+    """Above projects' base, the root bookmark covers it."""
+    at_data.onecmd("cd /")
+    at_data.onecmd("pwd")
+    assert capsys.readouterr().out == "root:/\n"
+
+
+def test_entered_by_uuid_still_finds_a_name(sh, capsys):
+    """A UUID with a bookmark on it shows the bookmark: the most specific."""
+    sh.onecmd(f"cd {COLLECTION}:/data/project-b")
+    sh.onecmd("pwd")
+    assert capsys.readouterr().out == "projects:project-b\n"
+
+
+def test_the_entered_name_is_preferred(at_data, capsys):
+    """cd root: then into /data stays 'root', not the more specific name."""
+    at_data.onecmd("cd root:/data/project-a")
+    at_data.onecmd("pwd")
+    assert capsys.readouterr().out == "root:/data/project-a\n"
+
+
+def test_no_name_falls_back_to_the_uuid_and_display_name(sh, monkeypatch, capsys):
+    """Nothing points at it: pwd prints UUID:/path, the prompt the title."""
+    monkeypatch.setattr(fs, "bookmark_index", lambda tc: [])
+    sh.interactive = True
+    sh.onecmd(f"cd {COLLECTION}:/data")
+    sh.onecmd("pwd")
+    assert capsys.readouterr().out == f"{COLLECTION}:/data\n"
+    assert sh.prompt == f"[{DISPLAY_NAME[:31]}\u2026] /data> "
+
+
+def test_display_name_is_fetched_once(sh, monkeypatch, client):
+    """One API call per collection, however often the prompt is drawn."""
+    monkeypatch.setattr(fs, "bookmark_index", lambda tc: [])
+    sh.interactive = True
+    for path in ("/data", "/data/project-a", "/data/project-b"):
+        sh.onecmd(f"cd {COLLECTION}:{path}")
+    assert client.endpoint_calls == [COLLECTION]
+
+
+def test_a_shortcut_names_the_collection(sh, monkeypatch, capsys):
+    """Site shortcuts count too, below bookmarks."""
+    from globus_tools.shortcuts import Shortcut
+
+    monkeypatch.setattr(fs, "bookmark_index", lambda tc: [])
+    monkeypatch.setattr(
+        fs,
+        "site_shortcuts",
+        lambda: {"lab": Shortcut("lab", COLLECTION, "/data/project-a", "test")},
+    )
+    sh.onecmd(f"cd {COLLECTION}:/data/project-a/sub1")
+    sh.onecmd("pwd")
+    assert capsys.readouterr().out == "lab:sub1\n"
+
+
+def test_names_that_would_not_paste_back_are_skipped(sh, monkeypatch, capsys):
+    """A bookmark called 'my data' cannot be typed as one word."""
+    monkeypatch.setattr(
+        fs,
+        "bookmark_index",
+        lambda tc: [{"name": "my data", "endpoint_id": COLLECTION, "path": "/"}],
+    )
+    sh.onecmd(f"cd {COLLECTION}:/data")
+    sh.onecmd("pwd")
+    assert capsys.readouterr().out == f"{COLLECTION}:/data\n"

@@ -308,6 +308,11 @@ $ globus-fs shell dataden:/umms-mylab
 [dataden] /umms-mylab/fastq> exit
 ```
 
+The prompt shows the same name `pwd` uses: the one you entered with, else
+your bookmark, else a site shortcut, else the collection's display name.
+`name:path` is relative to that name's base path, so it always resolves
+back to the same place.
+
 **Not a filesystem.** Nothing is mounted and no file is read: each command
 is the same Globus API call `globus-fs` makes, and the prompt always names
 the collection. What the shell adds is a current directory, so paths are
@@ -317,7 +322,9 @@ relative, plus Tab completion, `|` and `>`.
 | --- | --- |
 | `ls`, `stat`, `find`, `du`, `archivescan` | as above; the path defaults to the current directory |
 | `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it |
-| `pwd` | prints `UUID:/path`, ready to paste into `globus-fs` or `globus-cli` |
+| `pwd` | prints `name:path`, using your bookmark or a site shortcut, which pastes back into `cd`, `globus-fs` and the like |
+| `pwd -u` | prints `UUID:/path`, for `globus-cli`, the web app, or anyone without your names |
+| `pwd -v` | both, plus the collection's Globus display name |
 | `collections`, `bookmark`, `tasks`, `task`, `watch`, `history`, `whoami` | as in `globus-fs` |
 | `lcd DIR`, `lpwd` | the local directory that `>` writes into |
 | `!command` | run any local command, with your own shell |

@@ -38,6 +38,9 @@ TREE = {
     "/data/project-b/empty": [],
 }
 
+#: The fake collection's Globus display name.
+DISPLAY_NAME = "Example University Research Storage Collection"
+
 BOOKMARKS = [
     {"id": "bm-0001", "name": "projects", "endpoint_id": COLLECTION, "path": "/data/"},
     {"id": "bm-0002", "name": "root", "endpoint_id": COLLECTION, "path": "/"},
@@ -165,6 +168,7 @@ class FakeTransferClient:
         self.unlistable = set(unlistable)
         self.ls_calls = []
         self.stat_calls = []
+        self.endpoint_calls = []
         self.created = []
         self.paginated = _Paginated(self)
 
@@ -221,6 +225,15 @@ class FakeTransferClient:
                 return FakeResponse(entry)
         self.ls_calls.pop()
         raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
+
+    def get_endpoint(self, collection):
+        """Describe a collection, as the API's endpoint document does.
+
+        :param collection: the collection id
+        :returns: a response carrying the display name
+        """
+        self.endpoint_calls.append(collection)
+        return FakeResponse({"id": collection, "display_name": DISPLAY_NAME})
 
     def bookmark_list(self):
         """Return the fake bookmarks.

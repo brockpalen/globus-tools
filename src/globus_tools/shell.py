@@ -189,12 +189,13 @@ class GlobusShell(cmd.Cmd):
         self.start = start
         self.parser = fs.build_parser(in_shell=True)
         self.interactive = sys.stdin.isatty()
-        self.here = None  # (collection, path, label)
+        self.here = None  # (collection, path, name it was entered by, or None)
         self.previous = None
         self.home = None
         self.status = 0
         self._tc = None
         self._cache = {}
+        self._display_names = {}
         self._set_prompt()
 
     # ---- state ----------------------------------------------------------
@@ -215,11 +216,11 @@ class GlobusShell(cmd.Cmd):
         elif self.here is None:
             self.prompt = "(no collection)> "
         else:
-            _, path, label = self.here
-            self.prompt = f"[{label}] {path}> "
+            collection, path, entered = self.here
+            self.prompt = f"[{self.label(collection, path, entered)}] {path}> "
 
     def resolve(self, text):
-        """Turn what was typed into a collection, an absolute path and a label.
+        """Turn what was typed into a collection, a path and how it was named.
 
         ``name:``, ``name:/path`` and ``UUID:/path`` name a collection; a
         ``name`` that is not a bookmark or shortcut is just a file name with
@@ -227,7 +228,8 @@ class GlobusShell(cmd.Cmd):
         previous directory, and anything else is relative to the current one.
 
         :param text: the path argument, or None for the current directory
-        :returns: ``(collection, path, label)``
+        :returns: ``(collection, path, name)``; name is the bookmark or
+            shortcut typed, or None for a UUID
         :raises ShellError: for a relative path before any ``cd``
         """
         if text == "-":
@@ -238,7 +240,7 @@ class GlobusShell(cmd.Cmd):
             head, sep, tail = text.partition(":")
             if sep and head and "/" not in head:
                 if is_uuid(head):
-                    return head, normalize(tail or "/"), head[:8]
+                    return head, normalize(tail or "/"), None
                 found = fs.lookup_name(self.tc, head)
                 if found is not None:
                     collection, base = found
@@ -248,12 +250,95 @@ class GlobusShell(cmd.Cmd):
                 "not on a collection yet: cd NAME: or cd UUID:/path first "
                 "('collections' and 'bookmark list' show the names)"
             )
-        collection, cwd, label = self.here
+        collection, cwd, entered = self.here
         if not text or text == ".":
             return self.here
         if text == "~" or text.startswith("~/"):
-            return collection, normalize("/~/" + text[2:]), label
-        return collection, normalize(posixpath.join(cwd, text)), label
+            return collection, normalize("/~/" + text[2:]), entered
+        return collection, normalize(posixpath.join(cwd, text)), entered
+
+    # ---- names for humans ------------------------------------------------
+    def _names_on(self, collection):
+        """Bookmarks, then site shortcuts, that point into a collection.
+
+        Skips names that would not paste back as one word, and a shortcut
+        hidden by a bookmark of the same name (the bookmark wins on lookup).
+
+        :param collection: the collection UUID
+        :returns: ``(name, base_path, rank)``, rank 0 for bookmarks, 1 shortcuts
+        """
+        found = []
+        try:
+            bookmarks = fs.bookmark_index(self.tc)
+        except SystemExit:  # bookmarks unavailable: shortcuts still work
+            bookmarks = []
+        for b in bookmarks:
+            if b.get("endpoint_id") == collection and b.get("name"):
+                found.append((b["name"], normalize(b.get("path") or "/"), 0))
+        taken = {b.get("name") for b in bookmarks}
+        for name, sc in fs.site_shortcuts().items():
+            if sc.collection == collection and name not in taken:
+                found.append((name, normalize(sc.path), 1))
+        return [f for f in found if not any(c.isspace() or c == ":" for c in f[0])]
+
+    def name_for(self, collection, path, entered=None):
+        """The ``name:path`` form of a location, as cd and globus-fs accept it.
+
+        Prefers the name it was entered by, then bookmarks, then shortcuts,
+        and the most specific base. ``name:rel`` is relative to the name's
+        base path, so it resolves back to exactly this location.
+
+        :param collection: the collection UUID
+        :param path: the absolute path
+        :param entered: the name the collection was entered by, if any
+        :returns: ``(name, "name:path")``, or None if no name covers it
+        """
+        best = None
+        for name, base, rank in self._names_on(collection):
+            if path != base and not path.startswith(base.rstrip("/") + "/"):
+                continue
+            key = (name != entered, rank, -len(base))
+            if best is None or key < best[0]:
+                best = (key, name, base)
+        if best is None:
+            return None
+        _, name, base = best
+        if base == "/":
+            return name, f"{name}:{path}"
+        return name, f"{name}:{path[len(base):].lstrip('/')}"
+
+    def display_name(self, collection):
+        """The collection's Globus display name, fetched once per session.
+
+        :param collection: the collection UUID
+        :returns: the display name, or None if it cannot be had
+        """
+        if collection not in self._display_names:
+            try:
+                doc = self.tool.call(self.tc.get_endpoint, collection)
+                self._display_names[collection] = doc.get("display_name") or None
+            except globus_sdk.GlobusAPIError:
+                self._display_names[collection] = None
+        return self._display_names[collection]
+
+    def label(self, collection, path, entered=None):
+        """What the prompt calls the current collection.
+
+        The name pwd would print, else the display name (shortened), else
+        the start of the UUID.
+
+        :param collection: the collection UUID
+        :param path: the absolute path
+        :param entered: the name the collection was entered by, if any
+        :returns: a short label
+        """
+        named = self.name_for(collection, path, entered)
+        if named:
+            return named[0]
+        title = self.display_name(collection)
+        if title:
+            return title if len(title) <= 32 else title[:31] + "\u2026"
+        return collection[:8]
 
     def _listing(self, collection, path):
         """List a directory for tab completion, reusing a recent listing.
@@ -454,7 +539,7 @@ class GlobusShell(cmd.Cmd):
             target = self.home
         else:
             target = self.resolve(words[0])
-        collection, path, label = target
+        collection, path, _ = target
         if path != "/":
             try:
                 entry = self.tool.call(self.tc.operation_stat, collection, path)
@@ -469,12 +554,27 @@ class GlobusShell(cmd.Cmd):
         self._set_prompt()
 
     def builtin_pwd(self, words):
-        """pwd: print UUID:/path, ready for globus-fs or globus-cli.
+        """pwd [-u | -v]: where you are, in a form you can paste back.
 
-        :param words: none
+        ``name:path`` by default, for cd, globus-fs and people; ``-u`` the
+        ``UUID:/path`` globus-cli and the web app take; ``-v`` both, plus
+        the collection's display name.
+
+        :param words: no option, ``-u`` or ``-v``
         """
-        collection, path, _ = self.resolve(None)
-        print(f"{collection}:{path}")
+        if len(words) > 1 or (words and words[0] not in ("-u", "-v")):
+            raise ShellError("usage: pwd [-u | -v]")
+        collection, path, entered = self.resolve(None)
+        uuid_form = f"{collection}:{path}"
+        named = self.name_for(collection, path, entered)
+        if not words:
+            print(named[1] if named else uuid_form)
+        elif words[0] == "-u":
+            print(uuid_form)
+        else:
+            print(f"      name: {named[1] if named else '-'}")
+            print(f"collection: {self.display_name(collection) or '-'}")
+            print(f"      uuid: {uuid_form}")
 
     def builtin_lcd(self, words):
         """lcd [DIR]: change the local directory > and >> write in.
