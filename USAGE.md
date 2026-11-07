@@ -89,6 +89,20 @@ Dotfiles are shown by default, which is the Globus API's behaviour.
 
 **One directory is one API call.** `-R` costs one per directory.
 
+## `stat` — one file or directory
+
+```sh
+globus-fs stat dataden:/umms-mylab/backups/run1.tar
+```
+
+Type, size, mode, owner, group and modification time, from one API call:
+unlike `ls`, it never lists a directory's contents, however large.
+
+| option | |
+| --- | --- |
+| `--local-user` | map to this local account (GCSv5 mapped collections) |
+| `--format json` | the raw entry, plus `path` and `collection` |
+
 ## `find` — search recursively
 
 ```sh
@@ -262,6 +276,49 @@ for d in lab1 lab2 lab3; do
   globus-fs archivescan "turbo:/$d" --format tsv --no-header
 done
 ```
+
+## `shell` — cd around a collection
+
+```
+$ globus-fs shell dataden:/umms-mylab
+[dataden] /umms-mylab> cd fastq
+[dataden] /umms-mylab/fastq> ls -l
+[dataden] /umms-mylab/fastq> find -name '*.gz' | wc -l
+[dataden] /umms-mylab/fastq> du -d 1 > sizes.txt
+[dataden] /umms-mylab/fastq> exit
+```
+
+**Not a filesystem.** Nothing is mounted and no file is read: each command
+is the same Globus API call `globus-fs` makes, and the prompt always names
+the collection. What the shell adds is a current directory, so paths are
+relative, plus Tab completion, `|` and `>`.
+
+| | |
+| --- | --- |
+| `ls`, `stat`, `find`, `du`, `archivescan` | as above; the path defaults to the current directory |
+| `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it |
+| `pwd` | prints `UUID:/path`, ready to paste into `globus-fs` or `globus-cli` |
+| `collections`, `bookmark`, `tasks`, `task`, `watch`, `history`, `whoami` | as in `globus-fs` |
+| `lcd DIR`, `lpwd` | the local directory that `>` writes into |
+| `!command` | run any local command, with your own shell |
+| `help [COMMAND]`, `exit` (or Ctrl-D) | |
+
+`find` also accepts `-name`, `-iname`, `-type` and `-maxdepth`, as people type them.
+
+**`|` sends output to read-only local filters only:** `wc`, `grep`, `egrep`,
+`fgrep`, `sort`, `uniq`, `head`, `tail`, `cut`, `tr`, `column`, `nl`, `less`.
+Anything else after `|` is refused, along with `sort -o`, `uniq IN OUT` and
+`less` commands: the input is remote names, and `ls | xargs rm` would delete
+your *local* files that share them. Use `!command` for anything else local.
+`;`, `&`, `<` and backticks are refused rather than taken as text.
+
+**`> FILE` creates a new local file only you can read** (mode 600, since on a
+high assurance collection names are data), and never overwrites an existing
+file; `>> FILE` appends. E.g. `find --batch --name '*.tmp' > delete.txt` for
+`globus delete --batch`.
+
+No history is written to disk. Without a terminal, `globus-fs shell < cmds.txt`
+runs the lines as a script; its exit status is the last command's.
 
 ## `collections` — site shortcuts
 

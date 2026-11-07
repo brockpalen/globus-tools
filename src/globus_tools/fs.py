@@ -111,20 +111,34 @@ def _resolve_target(args, tc):
         path = tail or "/"
         return head, path if path.startswith("/") else "/" + path
 
-    # A personal bookmark wins over a site shortcut, the same way user
-    # config wins over /etc everywhere else.
-    bm = resolve_bookmark(tc, head)
-    if bm is not None:
-        return bm["endpoint_id"], _join_within(bm.get("path"), tail)
-
-    shortcut = site_shortcuts().get(head)
-    if shortcut is not None:
-        return shortcut.collection, _join_within(shortcut.path, tail)
+    found = lookup_name(tc, head)
+    if found is not None:
+        collection, base = found
+        return collection, _join_within(base, tail)
 
     sys.exit(
         f"'{head}' is not a collection UUID, a bookmark or a known "
         f"collection name.\n" + _known_names_hint(tc)
     )
+
+
+def lookup_name(tc, name):
+    """Find a bookmark or collection shortcut by name.
+
+    A personal bookmark wins over a site shortcut, the same way user config
+    wins over /etc everywhere else.
+
+    :param tc: an authenticated Transfer client, for bookmarks
+    :param name: the name typed before the colon
+    :returns: ``(collection_id, base_path)``, or None if nothing has that name
+    """
+    bm = resolve_bookmark(tc, name)
+    if bm is not None:
+        return bm["endpoint_id"], bm.get("path") or "/"
+    shortcut = site_shortcuts().get(name)
+    if shortcut is not None:
+        return shortcut.collection, shortcut.path
+    return None
 
 
 def _known_names_hint(tc):
@@ -554,6 +568,37 @@ def cmd_ls_fs(args):
     except globus_sdk.TransferAPIError as e:
         args.tool.api_error(e)
     _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
+
+
+def cmd_stat(args):
+    """Show one file or directory's type, size, owner, mode and mtime.
+
+    One ``stat`` call, however big the directory: unlike ``ls``, it never
+    lists contents.
+
+    :param args: parsed arguments
+    """
+    tc = args.tool.transfer_client(args)
+    collection, path = _resolve_target(args, tc)
+    kwargs = {"local_user": args.local_user} if args.local_user else {}
+    try:
+        entry = args.tool.call(tc.operation_stat, collection, path, **kwargs).data
+    except globus_sdk.TransferAPIError as e:
+        args.tool.api_error(e)
+    if args.format == "json":
+        json.dump(dict(entry, path=path, collection=collection), sys.stdout, indent=2)
+        print()
+        return
+    size = entry.get("size")
+    print(f"  Path: {path}")
+    print(f"  Type: {entry.get('type', '?')}")
+    if entry.get("link_target"):
+        print(f"  Link: -> {entry['link_target']}")
+    if size is not None:
+        print(f"  Size: {size} ({human_bytes(size)})")
+    print(f"  Mode: {_mode_string(entry)}  ({entry.get('permissions') or '?'})")
+    print(f" Owner: {entry.get('user') or '?'}  Group: {entry.get('group') or '?'}")
+    print(f"Modify: {entry.get('last_modified') or '?'}")
 
 
 def cmd_du(args):
@@ -1033,6 +1078,9 @@ your transfers
   tasks, watch, history and task show transfers you submitted. Collection
   administrators wanting everyone's use globus-console.
 
+interactive
+  globus-fs shell [TARGET]   cd around a collection; see: globus-fs shell -h
+
 Full reference, with examples: USAGE.md
 """
 
@@ -1060,12 +1108,58 @@ format:
 A bookmark of the same name takes precedence; --check-bookmarks flags those.
 """
 
+SHELL_EPILOG = """\
+Not a filesystem: nothing is mounted and no file is read. Each command is
+a Globus API call, and the prompt names the collection you are on.
 
-def build_parser():
+  [dataden] /umms-mylab> cd fastq
+  [dataden] /umms-mylab/fastq> ls -l
+  [dataden] /umms-mylab/fastq> find --name '*.gz' | wc -l
+  [dataden] /umms-mylab/fastq> du -d 1 > sizes.txt
+
+paths
+  relative, .., -, /absolute, or name:/path or UUID:/path for another
+  collection. Tab completes names.
+
+commands
+  ls stat find du archivescan    as globus-fs, paths relative to here
+  cd pwd                         move around; pwd prints UUID:/path
+  collections bookmark tasks task watch history whoami
+  lcd lpwd                       the local directory, for > and >>
+  !command                       run any local command
+  help [command]   exit
+
+| and >
+  Output can go through read-only local filters: wc grep egrep fgrep sort
+  uniq head tail cut tr column nl less more. Anything else after | is
+  refused (use !command). > FILE writes a new local file only you can
+  read and never overwrites one; >> FILE appends.
+
+No history is saved to disk: on high assurance collections, paths are data.
+"""
+
+
+def cmd_shell(args):
+    """Start the interactive shell.
+
+    :param args: parsed arguments
+    """
+    from .shell import GlobusShell
+
+    status = GlobusShell(args.tool, start=args.target).run()
+    if status:
+        sys.exit(status)
+
+
+def build_parser(in_shell=False):
     """Build the globus-fs command line parser.
 
+    :param in_shell: build the parser ``globus-fs shell`` runs each line with:
+        the path argument becomes optional, defaulting to the current
+        directory, and the ``shell`` command itself is left out
     :returns: the configured top-level parser
     """
+    target_nargs = "?" if in_shell else None
     p = new_parser(
         "globus-fs",
         "ls, find and du for Globus collections, plus your own transfers.",
@@ -1081,6 +1175,7 @@ def build_parser():
         """
         sp.add_argument(
             "target",
+            nargs=target_nargs,
             help="COLLECTION_UUID:/path, or a bookmark name "
             "(see the 'bookmark' command)",
         )
@@ -1110,7 +1205,9 @@ def build_parser():
         )
 
     lsp = sub.add_parser("ls", help="list a directory on a collection")
-    lsp.add_argument("target", help="COLLECTION_UUID:/path, or a bookmark name")
+    lsp.add_argument(
+        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+    )
     lsp.add_argument(
         "-l", "--long", action="store_true", help="mode, owner, size and mtime"
     )
@@ -1157,6 +1254,18 @@ def build_parser():
     )
     add_common(lsp)
     lsp.set_defaults(func=cmd_ls_fs, summary=False)
+
+    st = sub.add_parser(
+        "stat", help="type, size, owner, mode and mtime of one file or directory"
+    )
+    st.add_argument(
+        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+    )
+    st.add_argument(
+        "--local-user", help="map to this local account (GCSv5 mapped collections)"
+    )
+    add_common(st)
+    st.set_defaults(func=cmd_stat)
 
     f = sub.add_parser("find", help="recursive search over a collection")
     add_walk_opts(f)
@@ -1286,6 +1395,22 @@ def build_parser():
     bmd.set_defaults(func=cmd_bookmark_delete)
 
     bm.set_defaults(func=lambda a: (bm.print_help(), sys.exit(1)))
+
+    if not in_shell:
+        sh = sub.add_parser(
+            "shell",
+            help="an interactive shell: cd around a collection, run ls, find, "
+            "du with relative paths",
+            epilog=SHELL_EPILOG,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sh.add_argument(
+            "target",
+            nargs="?",
+            help="where to start: COLLECTION_UUID:/path, or a bookmark or "
+            "collection name",
+        )
+        sh.set_defaults(func=cmd_shell)
 
     tasks.add_task_commands(sub, admin=False)
     TOOL.add_auth_commands(sub)

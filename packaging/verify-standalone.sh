@@ -47,6 +47,11 @@ starts() {
 starts "$PREFIX/bin" -i
 ok "starts with an empty environment"
 
+# 1b. Tab completion in globus-fs shell needs the bundled readline.
+"$PREFIX/python/bin/python3" -I -c "import readline" 2>"$scratch/err" ||
+    die "no readline in the bundled Python: $(cat "$scratch/err")"
+ok "readline present, for globus-fs shell"
+
 # 2. A foreign globus_sdk, as an old globus-cli module would supply, on
 #    PYTHONPATH and in the working directory.
 mkdir -p "$scratch/poison/globus_sdk"

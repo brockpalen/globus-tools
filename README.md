@@ -21,6 +21,10 @@ $ globus-fs du dataden:/umms-mylab -d 1
   4.1G      5     1  /umms-mylab/fastq
 ```
 
+`globus-fs shell` does the same interactively: `cd` around a collection,
+with relative paths, Tab completion and `| wc -l`. It is not a filesystem;
+every command is a Globus API call.
+
 **`globus-console`** is the web console's **Activity** tab as a greppable
 table, one line per transfer, across every collection you monitor:
 

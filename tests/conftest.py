@@ -113,6 +113,45 @@ class FakeAPIError(globus_sdk.TransferAPIError):
         return None
 
 
+class FakeResponse:
+    """A single-document response, shaped like the SDK's GlobusHTTPResponse.
+
+    Deliberately not a dict: ``dict(response)`` fails on the real thing (it
+    iterates as a list), and a plain dict here once hid exactly that bug.
+    """
+
+    def __init__(self, data):
+        """Wrap a document.
+
+        :param data: the response body
+        """
+        self.data = data
+
+    def __getitem__(self, key):
+        """Index the body by key, as the SDK does.
+
+        :param key: the field name
+        :returns: the field's value
+        """
+        return self.data[key]
+
+    def get(self, key, default=None):
+        """Read a field with a default, as the SDK does.
+
+        :param key: the field name
+        :param default: returned when the field is absent
+        :returns: the field's value, or ``default``
+        """
+        return self.data.get(key, default)
+
+    def __iter__(self):
+        """Refuse iteration: the real single-document response is not a mapping.
+
+        :raises TypeError: always
+        """
+        raise TypeError("a GlobusHTTPResponse is not a mapping; use .data")
+
+
 class FakeTransferClient:
     """A Transfer client serving :data:`TREE` and :data:`BOOKMARKS`."""
 
@@ -125,6 +164,7 @@ class FakeTransferClient:
         self.tasks = tasks or []
         self.unlistable = set(unlistable)
         self.ls_calls = []
+        self.stat_calls = []
         self.created = []
         self.paginated = _Paginated(self)
 
@@ -158,6 +198,29 @@ class FakeTransferClient:
             }
             for name, kind, size in TREE[key]
         ]
+
+    def operation_stat(self, collection, path, **kwargs):
+        """Stat one entry of the fake tree, without listing it.
+
+        :param collection: the collection id, recorded but unused
+        :param path: the file or directory
+        :param kwargs: accepted and ignored
+        :returns: the entry, as its parent's listing shows it
+        :raises FakeAPIError: if the path is absent
+        """
+        self.stat_calls.append(path)
+        path = path.rstrip("/") or "/"
+        parent, name = path.rsplit("/", 1)
+        if path in TREE:  # a directory, whether or not its parent is in TREE
+            return FakeResponse(
+                {"name": name, "type": "dir", "size": 0, "permissions": "0755"}
+            )
+        for entry in self.operation_ls(collection, parent or "/"):
+            if entry["name"] == name:
+                self.ls_calls.pop()  # a stat is not a listing
+                return FakeResponse(entry)
+        self.ls_calls.pop()
+        raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
 
     def bookmark_list(self):
         """Return the fake bookmarks.
