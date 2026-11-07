@@ -472,8 +472,14 @@ def _print_columns(names, width):
 
 
 def _ls_emit(args, rows):
-    """rows is a list of (entry, display_path)."""
-    fmt_size = (lambda n: str(n)) if args.bytes else human_bytes
+    """rows is a list of (entry, display_path).
+
+    Sizes are bytes, as ``ls -l`` prints them, unless ``-h`` or ``--si``.
+    """
+    fmt_size = {
+        "human": human_size,
+        "si": lambda n: human_size(n, 1000),
+    }.get(args.units, str)
 
     if args.format == "json":
         json.dump([e for e, _ in rows], sys.stdout, indent=2, default=str)
@@ -1284,7 +1290,9 @@ def build_parser(in_shell=False):
             "--summary", action="store_true", help="print totals to stderr when done"
         )
 
-    lsp = sub.add_parser("ls", help="list a directory on a collection")
+    # As for du: GNU ls's letters, so -h is human-readable and help is --help.
+    lsp = sub.add_parser("ls", help="list a directory on a collection", add_help=False)
+    lsp.add_argument("--help", action="help", help="show this help and exit")
     lsp.add_argument(
         "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
     )
@@ -1310,8 +1318,22 @@ def build_parser(in_shell=False):
         help="sort by modification time, newest first",
     )
     lsp.add_argument("-r", "--reverse", action="store_true", help="reverse order")
-    lsp.add_argument(
-        "-b", "--bytes", action="store_true", help="raw bytes instead of human units"
+    ls_units = lsp.add_mutually_exclusive_group()
+    ls_units.add_argument(
+        "-h",
+        "--human-readable",
+        dest="units",
+        action="store_const",
+        const="human",
+        help="with -l, sizes like 1.5K 234M 2.0G in powers of 1024; "
+        "bytes otherwise, as for ls",
+    )
+    ls_units.add_argument(
+        "--si",
+        dest="units",
+        action="store_const",
+        const="si",
+        help="like -h, in powers of 1000",
     )
     lsp.add_argument("--no-hidden", action="store_true", help="skip dotfiles")
     lsp.add_argument(
@@ -1333,7 +1355,7 @@ def build_parser(in_shell=False):
         help="unlistable directories to print (default: 10)",
     )
     add_common(lsp)
-    lsp.set_defaults(func=cmd_ls_fs, summary=False)
+    lsp.set_defaults(func=cmd_ls_fs, summary=False, units=None)
 
     st = sub.add_parser(
         "stat", help="type, size, owner, mode and mtime of one file or directory"

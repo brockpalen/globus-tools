@@ -241,6 +241,43 @@ def test_ls_long_renders_a_mode_string(run, capsys):
     assert "-rw-r--r--" in out
 
 
+def ls_long_sizes(capsys):
+    """Map each name in ls -l output to its size column.
+
+    :param capsys: pytest's capsys fixture
+    :returns: ``{name: size}``
+    """
+    lines = capsys.readouterr().out.strip().splitlines()
+    return {line.split()[-1]: line.split()[3] for line in lines}
+
+
+def test_ls_long_shows_bytes_like_ls(run, capsys):
+    """ls -l prints exact sizes, as ls does."""
+    run(["ls", "-l", f"{COLL}:/data/project-a"])
+    assert ls_long_sizes(capsys)["file2.bin"] == str(2 * GB)
+
+
+def test_ls_h_is_human_readable(run, capsys):
+    """ls -lh: powers of 1024, rounded up, as GNU ls -lh."""
+    run(["ls", "-lh", f"{COLL}:/data/project-a"])
+    sizes = ls_long_sizes(capsys)
+    assert sizes["file2.bin"] == "1.9G"
+    assert sizes["file1.bin"] == "96M"
+
+
+def test_ls_si(run, capsys):
+    """ls -l --si: powers of 1000."""
+    run(["ls", "-l", "--si", f"{COLL}:/data/project-a"])
+    assert ls_long_sizes(capsys)["file2.bin"] == "2.0G"
+
+
+def test_ls_help_is_long_only(run, capsys):
+    """-h is human-readable, so help is --help."""
+    with pytest.raises(SystemExit):
+        run(["ls", "--help"])
+    assert "--human-readable" in capsys.readouterr().out
+
+
 def test_ls_classify_marks_directories(run, capsys):
     """-F appends a slash, as ls does."""
     run(["ls", f"{COLL}:/data", "-F"])

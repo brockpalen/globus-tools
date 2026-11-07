@@ -61,7 +61,8 @@ Accepted by most commands.
 
 ```sh
 globus-fs ls dataden:/umms-mylab
-globus-fs ls -l dataden:/umms-mylab
+globus-fs ls -l dataden:/umms-mylab     # sizes in bytes, as ls -l
+globus-fs ls -lh dataden:/umms-mylab    # 1.5K 234M 2.0G
 globus-fs ls -lS dataden:/lab          # largest first
 globus-fs ls -lt dataden:/lab          # newest first
 globus-fs ls -lR dataden:/lab          # recursive
@@ -76,7 +77,8 @@ globus-fs ls -lR dataden:/lab          # recursive
 | `-S` | sort by size, largest first |
 | `-t` | sort by modification time, newest first |
 | `-r, --reverse` | reverse the order |
-| `-b, --bytes` | raw bytes instead of human units |
+| `-h, --human-readable` | with `-l`, sizes like `1.5K` `234M` `2.0G` in powers of 1024 |
+| `--si` | the same in powers of 1000 |
 | `--no-hidden` | skip dotfiles |
 | `--local-user NAME` | map to this local account (GCSv5 mapped collections) |
 | `--width N` | terminal width to lay columns out for |
@@ -84,7 +86,9 @@ globus-fs ls -lR dataden:/lab          # recursive
 | `--maxdepth N` | with `-R`, how deep to go |
 | `--max-errors N` | unlistable directories to report; 10 by default |
 
-Behaves like `ls`: multi-column on a terminal, one name per line when piped.
+Behaves like `ls`: multi-column on a terminal, one name per line when
+piped, and sizes in bytes unless `-h`. Help is `--help`, since `-h` is
+human-readable.
 Dotfiles are shown by default, which is the Globus API's behaviour.
 
 **One directory is one API call.** `-R` costs one per directory.
