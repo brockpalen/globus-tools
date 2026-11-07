@@ -61,7 +61,8 @@ Accepted by most commands.
 
 ```sh
 globus-fs ls dataden:/umms-mylab
-globus-fs ls -l dataden:/umms-mylab
+globus-fs ls -l dataden:/umms-mylab     # sizes in bytes, as ls -l
+globus-fs ls -lh dataden:/umms-mylab    # 1.5K 234M 2.0G
 globus-fs ls -lS dataden:/lab          # largest first
 globus-fs ls -lt dataden:/lab          # newest first
 globus-fs ls -lR dataden:/lab          # recursive
@@ -76,7 +77,8 @@ globus-fs ls -lR dataden:/lab          # recursive
 | `-S` | sort by size, largest first |
 | `-t` | sort by modification time, newest first |
 | `-r, --reverse` | reverse the order |
-| `-b, --bytes` | raw bytes instead of human units |
+| `-h, --human-readable` | with `-l`, sizes like `1.5K` `234M` `2.0G` in powers of 1024 |
+| `--si` | the same in powers of 1000 |
 | `--no-hidden` | skip dotfiles |
 | `--local-user NAME` | map to this local account (GCSv5 mapped collections) |
 | `--width N` | terminal width to lay columns out for |
@@ -84,10 +86,26 @@ globus-fs ls -lR dataden:/lab          # recursive
 | `--maxdepth N` | with `-R`, how deep to go |
 | `--max-errors N` | unlistable directories to report; 10 by default |
 
-Behaves like `ls`: multi-column on a terminal, one name per line when piped.
+Behaves like `ls`: multi-column on a terminal, one name per line when
+piped, and sizes in bytes unless `-h`. Help is `--help`, since `-h` is
+human-readable.
 Dotfiles are shown by default, which is the Globus API's behaviour.
 
 **One directory is one API call.** `-R` costs one per directory.
+
+## `stat` — one file or directory
+
+```sh
+globus-fs stat dataden:/umms-mylab/backups/run1.tar
+```
+
+Type, size, mode, owner, group and modification time, from one API call:
+unlike `ls`, it never lists a directory's contents, however large.
+
+| option | |
+| --- | --- |
+| `--local-user` | map to this local account (GCSv5 mapped collections) |
+| `--format json` | the raw entry, plus `path` and `collection` |
 
 ## `find` — search recursively
 
@@ -163,28 +181,44 @@ The file opens with comment lines naming the collection and giving the exact
 ## `du` — sizes and file counts
 
 ```sh
-globus-fs du dataden:/lab              # whole tree, biggest first
-globus-fs du dataden:/lab -d 1         # like du -d 1 -h
-globus-fs du dataden:/lab -d 2 --sort files
-globus-fs du dataden:/lab --bytes --format tsv
+globus-fs du -sh dataden:/lab                  # one total
+globus-fs du -h --max-depth 1 -c dataden:/lab  # one level, then a total
+globus-fs du -h dataden:/lab -d 2 --sort files
+globus-fs du -b dataden:/lab --format tsv      # exact bytes
 ```
 
 ```
   SIZE  FILES  DIRS  PATH
-104.1G      7     4  /data
-100.0G      1     1  /data/project-b
-  4.1G      5     1  /data/project-a
+   97G      7     4  /data
+   94G      1     1  /data/project-b
+  3.9G      5     1  /data/project-a
 ```
+
+Options follow GNU `du`. Without a unit option, sizes are in 1024-byte
+units rounded up, as `du` prints them; `-h` is human-readable, so help is
+`--help`.
 
 | option | |
 | --- | --- |
-| `-d, --depth N` | how deep to **print**, like `du -d` |
-| `--maxdepth N` | how deep to **walk** — changes the totals |
-| `-b, --bytes` | raw bytes instead of human units |
+| `-h, --human-readable` | `1.5K`, `234M`, `2.0G`, in powers of 1024 |
+| `--si` | the same in powers of 1000 |
+| `-b, --bytes` | bytes |
+| `-k`, `-m` | 1024-byte (the default) or 1048576-byte units |
+| `-B, --block-size SIZE` | units of `SIZE`, e.g. `1M` |
+| `-s, --summarize` | only the total for the path |
+| `-c, --total` | add a `total` line |
+| `-d, --depth, --max-depth N` | how deep to **print**; deeper levels are still counted |
+| `--maxdepth N` | how deep to **walk**, so totals leave out anything deeper (a warning says so) |
+| `--apparent-size` | accepted, and always in effect (below) |
 | `--sort size\|files\|path` | ordering; `size` by default |
 | `--summary` | directories scanned and elapsed time, to stderr |
 | `-j, --jobs N` | concurrent listings; 8 by default |
 | `--no-hidden`, `--local-user`, `--max-errors` | as for `ls` |
+
+**Sizes are apparent sizes**, the sum of what `ls -l` shows, like
+`du --apparent-size`: Globus reports each file's size, not the disk blocks
+it uses. Sparse files, compression, and files migrated to tape (where disk
+usage is near zero) all make real disk usage differ.
 
 `FILES` and `DIRS` are cumulative, so one walk answers "how big" and "how
 many files" together.
@@ -262,6 +296,56 @@ for d in lab1 lab2 lab3; do
   globus-fs archivescan "turbo:/$d" --format tsv --no-header
 done
 ```
+
+## `shell` — cd around a collection
+
+```
+$ globus-fs shell dataden:/umms-mylab
+[dataden] /umms-mylab> cd fastq
+[dataden] /umms-mylab/fastq> ls -l
+[dataden] /umms-mylab/fastq> find -name '*.gz' | wc -l
+[dataden] /umms-mylab/fastq> du -sh
+[dataden] /umms-mylab/fastq> exit
+```
+
+The prompt shows the same name `pwd` uses: the one you entered with, else
+your bookmark, else a site shortcut, else the collection's display name.
+`name:path` is relative to that name's base path, so it always resolves
+back to the same place.
+
+**Not a filesystem.** Nothing is mounted and no file is read: each command
+is the same Globus API call `globus-fs` makes, and the prompt always names
+the collection. What the shell adds is a current directory, so paths are
+relative, plus Tab completion, `|` and `>`.
+
+| | |
+| --- | --- |
+| `ls`, `stat`, `find`, `du`, `archivescan` | as above; the path defaults to the current directory |
+| `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it |
+| `pwd` | prints `name:path`, using your bookmark or a site shortcut, which pastes back into `cd`, `globus-fs` and the like |
+| `pwd -u` | prints `UUID:/path`, for `globus-cli`, the web app, or anyone without your names |
+| `pwd -v` | both, plus the collection's Globus display name |
+| `collections`, `bookmark`, `tasks`, `task`, `watch`, `history`, `whoami` | as in `globus-fs` |
+| `lcd DIR`, `lpwd` | the local directory that `>` writes into |
+| `!command` | run any local command, with your own shell |
+| `help [COMMAND]`, `exit` (or Ctrl-D) | |
+
+`find` also accepts `-name`, `-iname`, `-type` and `-maxdepth`, as people type them.
+
+**`|` sends output to read-only local filters only:** `wc`, `grep`, `egrep`,
+`fgrep`, `sort`, `uniq`, `head`, `tail`, `cut`, `tr`, `column`, `nl`, `less`.
+Anything else after `|` is refused, along with `sort -o`, `uniq IN OUT` and
+`less` commands: the input is remote names, and `ls | xargs rm` would delete
+your *local* files that share them. Use `!command` for anything else local.
+`;`, `&`, `<` and backticks are refused rather than taken as text.
+
+**`> FILE` creates a new local file only you can read** (mode 600, since on a
+high assurance collection names are data), and never overwrites an existing
+file; `>> FILE` appends. E.g. `find --batch --name '*.tmp' > delete.txt` for
+`globus delete --batch`.
+
+No history is written to disk. Without a terminal, `globus-fs shell < cmds.txt`
+runs the lines as a script; its exit status is the last command's.
 
 ## `collections` — site shortcuts
 

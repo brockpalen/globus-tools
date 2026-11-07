@@ -25,7 +25,8 @@ method has a docstring. Updating dependencies: see
 ```
 src/globus_tools/
     console.py      globus-console: the Activity view
-    fs.py           globus-fs: ls, find, du, archivescan, bookmarks, shortcuts
+    fs.py           globus-fs: ls, stat, find, du, archivescan, bookmarks, shortcuts
+    shell.py        globus-fs shell: cwd, relative paths, | filters, > files
     tasks.py        the task table both tools draw
     common.py       the GlobusApp, login and re-login, formatting
     security.py     token file and directory permissions
@@ -52,6 +53,7 @@ fixture drives `globus-fs`, `run_console` drives `globus-console`.
 | `test_relogin.py` | re-login for consent and high assurance (the 502 case), one login across threads |
 | `test_client_id.py` | client ID resolution |
 | `test_launch.py` | a foreign `globus_sdk` on `PYTHONPATH` cannot replace ours |
+| `test_shell.py` | `globus-fs shell`: paths, filter allow-list, private redirects, completion |
 | `test_fs.py` | `ls`, `du` rollups, `find` filters, API call counts |
 | `test_archivescan.py` | the size split, env default, snapshot and symlink skipping |
 | `test_batch.py` | `find --batch` round-trips through globus-cli's batch parser |

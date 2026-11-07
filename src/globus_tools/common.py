@@ -441,6 +441,23 @@ class Tool:
         if not hasattr(args, "func"):
             parser.print_help()
             return 1
+        try:
+            self.dispatch(args)
+        except BrokenPipeError:  # piping into head/grep -m
+            try:
+                sys.stdout.close()
+            finally:
+                os._exit(0)
+        return 0
+
+    def dispatch(self, args):
+        """Run one parsed command, logging in again once if the API asks.
+
+        Used by :meth:`run` and by ``globus-fs shell`` for each line.
+
+        :param args: parsed arguments carrying ``func``
+        :raises SystemExit: with an explanation, on an API error
+        """
         args.tool = self
         args._tc = getattr(args, "_tc", None)
         try:
@@ -453,12 +470,6 @@ class Tool:
                 args.func(args)
         except globus_sdk.GlobusAPIError as e:
             self.api_error(e)
-        except BrokenPipeError:  # piping into head/grep -m
-            try:
-                sys.stdout.close()
-            finally:
-                os._exit(0)
-        return 0
 
 
 def add_common(p):
