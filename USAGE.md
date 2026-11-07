@@ -177,28 +177,44 @@ The file opens with comment lines naming the collection and giving the exact
 ## `du` — sizes and file counts
 
 ```sh
-globus-fs du dataden:/lab              # whole tree, biggest first
-globus-fs du dataden:/lab -d 1         # like du -d 1 -h
-globus-fs du dataden:/lab -d 2 --sort files
-globus-fs du dataden:/lab --bytes --format tsv
+globus-fs du -sh dataden:/lab                  # one total
+globus-fs du -h --max-depth 1 -c dataden:/lab  # one level, then a total
+globus-fs du -h dataden:/lab -d 2 --sort files
+globus-fs du -b dataden:/lab --format tsv      # exact bytes
 ```
 
 ```
   SIZE  FILES  DIRS  PATH
-104.1G      7     4  /data
-100.0G      1     1  /data/project-b
-  4.1G      5     1  /data/project-a
+   97G      7     4  /data
+   94G      1     1  /data/project-b
+  3.9G      5     1  /data/project-a
 ```
+
+Options follow GNU `du`. Without a unit option, sizes are in 1024-byte
+units rounded up, as `du` prints them; `-h` is human-readable, so help is
+`--help`.
 
 | option | |
 | --- | --- |
-| `-d, --depth N` | how deep to **print**, like `du -d` |
-| `--maxdepth N` | how deep to **walk** — changes the totals |
-| `-b, --bytes` | raw bytes instead of human units |
+| `-h, --human-readable` | `1.5K`, `234M`, `2.0G`, in powers of 1024 |
+| `--si` | the same in powers of 1000 |
+| `-b, --bytes` | bytes |
+| `-k`, `-m` | 1024-byte (the default) or 1048576-byte units |
+| `-B, --block-size SIZE` | units of `SIZE`, e.g. `1M` |
+| `-s, --summarize` | only the total for the path |
+| `-c, --total` | add a `total` line |
+| `-d, --depth, --max-depth N` | how deep to **print**; deeper levels are still counted |
+| `--maxdepth N` | how deep to **walk**, so totals leave out anything deeper (a warning says so) |
+| `--apparent-size` | accepted, and always in effect (below) |
 | `--sort size\|files\|path` | ordering; `size` by default |
 | `--summary` | directories scanned and elapsed time, to stderr |
 | `-j, --jobs N` | concurrent listings; 8 by default |
 | `--no-hidden`, `--local-user`, `--max-errors` | as for `ls` |
+
+**Sizes are apparent sizes**, the sum of what `ls -l` shows, like
+`du --apparent-size`: Globus reports each file's size, not the disk blocks
+it uses. Sparse files, compression, and files migrated to tape (where disk
+usage is near zero) all make real disk usage differ.
 
 `FILES` and `DIRS` are cumulative, so one walk answers "how big" and "how
 many files" together.
@@ -284,7 +300,7 @@ $ globus-fs shell dataden:/umms-mylab
 [dataden] /umms-mylab> cd fastq
 [dataden] /umms-mylab/fastq> ls -l
 [dataden] /umms-mylab/fastq> find -name '*.gz' | wc -l
-[dataden] /umms-mylab/fastq> du -d 1 > sizes.txt
+[dataden] /umms-mylab/fastq> du -sh
 [dataden] /umms-mylab/fastq> exit
 ```
 

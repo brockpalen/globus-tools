@@ -14,11 +14,11 @@ product.
 only through Globus, plus your bookmarks and your own transfers:
 
 ```
-$ globus-fs du dataden:/umms-mylab -d 1
+$ globus-fs du -h dataden:/umms-mylab -d 1
   SIZE  FILES  DIRS  PATH
-104.1G      7     4  /umms-mylab
-100.0G      1     1  /umms-mylab/backups
-  4.1G      5     1  /umms-mylab/fastq
+   97G      7     4  /umms-mylab
+   94G      1     1  /umms-mylab/backups
+  3.9G      5     1  /umms-mylab/fastq
 ```
 
 `globus-fs shell` does the same interactively: `cd` around a collection,

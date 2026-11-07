@@ -601,11 +601,150 @@ def cmd_stat(args):
     print(f"Modify: {entry.get('last_modified') or '?'}")
 
 
+def human_size(n, base=1024):
+    """Format a byte count the way GNU ``du -h`` (or ``--si``) does.
+
+    Rounded up, never down, so a size is never understated: one decimal
+    below 10 (``1.5G``), whole numbers from there (``234M``), and plain
+    bytes below one unit. Integer arithmetic, so no float rounding.
+
+    :param n: the byte count
+    :param base: 1024 for ``-h``, 1000 for ``--si``
+    :returns: e.g. ``"512"``, ``"4.0K"``, ``"234M"``, ``"1.5G"``
+    """
+    if n < base:
+        return str(n)
+    letters = "KMGTPE" if base == 1024 else "kMGTPE"
+    for power, letter in enumerate(letters, start=1):
+        unit = base**power
+        last = power == len(letters)
+        tenths = -(-n * 10 // unit)  # ceil(n / unit, 1 decimal) * 10
+        if tenths < 100:
+            return f"{tenths // 10}.{tenths % 10}{letter}"
+        whole = -(-n // unit)
+        if whole < base or last:
+            return f"{whole}{letter}"
+    return str(n)  # pragma: no cover - the loop always returns
+
+
+def du_size_format(args):
+    """Choose how du prints a size, from its unit options.
+
+    The default is GNU du's: 1024-byte units, rounded up.
+
+    :param args: parsed arguments
+    :returns: a function from a byte count to its printed form
+    """
+    if args.block_size:
+        block = humanfriendly.parse_size(args.block_size, binary=True)
+        if block < 1:
+            sys.exit(f"du: invalid block size: {args.block_size}")
+        return lambda n: str(-(-n // block))
+    if args.units == "bytes":
+        return str
+    if args.units == "human":
+        return human_size
+    if args.units == "si":
+        return lambda n: human_size(n, 1000)
+    block = 1024**2 if args.units == "m" else 1024
+    return lambda n: str(-(-n // block))
+
+
+def _du_rollup(own, root):
+    """Add each directory's own contents into all of its ancestors.
+
+    :param own: ``{path: [bytes, files, dirs]}`` for each directory's own entries
+    :param root: the walk root, where rolling up stops
+    :returns: ``{path: [bytes, files, dirs]}`` cumulative totals
+    """
+    totals = {}
+    for path, (size, files, dirs) in own.items():
+        node = path
+        while True:
+            acc = totals.setdefault(node, [0, 0, 0])
+            acc[0] += size
+            acc[1] += files
+            acc[2] += dirs
+            if node == root:
+                break
+            parent = posixpath.dirname(node) or "/"
+            if parent == node:
+                break
+            node = parent
+    return totals
+
+
+def _du_depth(path, root):
+    """Depth of a path below the walk root.
+
+    :param path: an absolute path at or below the root
+    :param root: the walk root
+    :returns: 0 for the root itself, 1 for its children, and so on
+    """
+    if path == root:
+        return 0
+    rel = path[len(root) :].strip("/")
+    return len(rel.split("/")) if rel else 0
+
+
+def _du_emit(args, rows, fmt_size):
+    """Print du's rows as a table, TSV, CSV or JSON.
+
+    :param args: parsed arguments
+    :param rows: ``(path, [bytes, files, dirs])`` in display order
+    :param fmt_size: turns a byte count into the printed size
+    """
+    if args.format == "json":
+        json.dump(
+            [{"path": p, "bytes": t[0], "files": t[1], "dirs": t[2]} for p, t in rows],
+            sys.stdout,
+            indent=2,
+        )
+        print()
+        return
+    if args.format in ("tsv", "csv"):
+        writer = csv.writer(
+            sys.stdout,
+            delimiter="\t" if args.format == "tsv" else ",",
+            lineterminator="\n",
+        )
+        if not args.no_header:
+            writer.writerow(["SIZE", "FILES", "DIRS", "PATH"])
+        for p, t in rows:
+            writer.writerow([fmt_size(t[0]), t[1], t[2], p])
+        return
+    width = max([len(fmt_size(t[0])) for _, t in rows] + [4])
+    fwidth = max([len(str(t[1])) for _, t in rows] + [5])
+    dwidth = max([len(str(t[2])) for _, t in rows] + [4])
+    if not args.no_header:
+        print(
+            f"{'SIZE'.rjust(width)}  {'FILES'.rjust(fwidth)}  "
+            f"{'DIRS'.rjust(dwidth)}  PATH"
+        )
+    for p, t in rows:
+        print(
+            f"{fmt_size(t[0]).rjust(width)}  {str(t[1]).rjust(fwidth)}  "
+            f"{str(t[2]).rjust(dwidth)}  {p}"
+        )
+
+
 def cmd_du(args):
     """Report cumulative size and file counts per directory.
 
+    Sizes are apparent sizes: Globus reports each file's size, not the
+    blocks it occupies, so this is ``du --apparent-size``.
+
     :param args: parsed arguments
     """
+    fmt_size = du_size_format(args)
+    if args.summarize:
+        args.depth = 0
+    if args.maxdepth is not None:
+        print(
+            f"du: --maxdepth {args.maxdepth} stops the walk, so totals leave "
+            "out anything deeper; -d/--max-depth limits only what is printed",
+            file=sys.stderr,
+        )
     tc = args.tool.transfer_client(args)
     collection, root = _resolve_target(args, tc)
     root = root.rstrip("/") or "/"
@@ -624,80 +763,21 @@ def cmd_du(args):
         _report_walk_errors(args)
         return
 
-    # roll each directory's own contents up into all of its ancestors
-    totals = {}
-    for path, (size, files, dirs) in own.items():
-        node = path
-        while True:
-            acc = totals.setdefault(node, [0, 0, 0])
-            acc[0] += size
-            acc[1] += files
-            acc[2] += dirs
-            if node == root:
-                break
-            parent = posixpath.dirname(node) or "/"
-            if parent == node:
-                break
-            node = parent
-
-    def depth_of(path):
-        """Depth of a path below the walk root.
-
-        :param path: an absolute path at or below the root
-        :returns: 0 for the root itself, 1 for its children, and so on
-        """
-        if path == root:
-            return 0
-        rel = path[len(root) :].strip("/")
-        return len(rel.split("/")) if rel else 0
-
+    totals = _du_rollup(own, root)
     rows = [
         (p, t)
         for p, t in totals.items()
-        if args.depth is None or depth_of(p) <= args.depth
+        if args.depth is None or _du_depth(p, root) <= args.depth
     ]
-    if args.sort == "size":
-        rows.sort(key=lambda r: r[1][0], reverse=True)
-    elif args.sort == "files":
-        rows.sort(key=lambda r: r[1][1], reverse=True)
-    else:
-        rows.sort(key=lambda r: r[0])
-
-    if args.format == "json":
-        json.dump(
-            [{"path": p, "bytes": t[0], "files": t[1], "dirs": t[2]} for p, t in rows],
-            sys.stdout,
-            indent=2,
-        )
-        print()
-        _report_walk_errors(args)
-        return
-
-    fmt_size = (lambda n: str(n)) if args.bytes else human_bytes
-    if args.format in ("tsv", "csv"):
-        writer = csv.writer(
-            sys.stdout,
-            delimiter="\t" if args.format == "tsv" else ",",
-            lineterminator="\n",
-        )
-        if not args.no_header:
-            writer.writerow(["SIZE", "FILES", "DIRS", "PATH"])
-        for p, t in rows:
-            writer.writerow([fmt_size(t[0]), t[1], t[2], p])
-    else:
-        width = max([len(fmt_size(t[0])) for _, t in rows] + [4])
-        fwidth = max([len(str(t[1])) for _, t in rows] + [5])
-        dwidth = max([len(str(t[2])) for _, t in rows] + [4])
-        if not args.no_header:
-            print(
-                f"{'SIZE'.rjust(width)}  {'FILES'.rjust(fwidth)}  "
-                f"{'DIRS'.rjust(dwidth)}  PATH"
-            )
-        for p, t in rows:
-            print(
-                f"{fmt_size(t[0]).rjust(width)}  {str(t[1]).rjust(fwidth)}  "
-                f"{str(t[2]).rjust(dwidth)}  {p}"
-            )
+    sort_key = {
+        "size": lambda r: -r[1][0],
+        "files": lambda r: -r[1][1],
+        "path": lambda r: r[0],
+    }[args.sort]
+    rows.sort(key=sort_key)
+    if args.total:  # one path, so the grand total is the root's, as du -c
+        rows.append(("total", totals[root]))
+    _du_emit(args, rows, fmt_size)
 
     walker = getattr(args, "_walker", None)
     if args.summary and walker:
@@ -1115,7 +1195,7 @@ a Globus API call, and the prompt names the collection you are on.
   [dataden] /umms-mylab> cd fastq
   [dataden] /umms-mylab/fastq> ls -l
   [dataden] /umms-mylab/fastq> find --name '*.gz' | wc -l
-  [dataden] /umms-mylab/fastq> du -d 1 > sizes.txt
+  [dataden] /umms-mylab/fastq> du -h -d 1 > sizes.txt
 
 paths
   relative, .., -, /absolute, or name:/path or UUID:/path for another
@@ -1297,13 +1377,80 @@ def build_parser(in_shell=False):
     f.add_argument("--limit", type=int, default=0, help="stop after N matches")
     f.set_defaults(func=cmd_find, format="table", no_header=False)
 
-    d = sub.add_parser("du", help="sizes and file counts per directory")
+    # GNU du's options on GNU du's letters; -h is human-readable, as there,
+    # so help is --help only.
+    d = sub.add_parser("du", help="sizes and file counts per directory", add_help=False)
+    d.add_argument("--help", action="help", help="show this help and exit")
     add_walk_opts(d)
     d.add_argument(
-        "-d", "--depth", type=int, help="show totals down to this depth (like du -d)"
+        "-d",
+        "--depth",
+        "--max-depth",
+        dest="depth",
+        type=int,
+        metavar="N",
+        help="print totals down to N levels; everything deeper is still "
+        "counted (du -d, --max-depth)",
     )
     d.add_argument(
-        "-b", "--bytes", action="store_true", help="raw bytes instead of human units"
+        "-s",
+        "--summarize",
+        action="store_true",
+        help="print only the total for the path itself (du -s)",
+    )
+    d.add_argument(
+        "-c", "--total", action="store_true", help="add a grand total line (du -c)"
+    )
+    units = d.add_mutually_exclusive_group()
+    units.add_argument(
+        "-h",
+        "--human-readable",
+        dest="units",
+        action="store_const",
+        const="human",
+        help="sizes like 1.5K 234M 2.0G, in powers of 1024",
+    )
+    units.add_argument(
+        "--si",
+        dest="units",
+        action="store_const",
+        const="si",
+        help="like -h, in powers of 1000",
+    )
+    units.add_argument(
+        "-b",
+        "--bytes",
+        dest="units",
+        action="store_const",
+        const="bytes",
+        help="sizes in bytes",
+    )
+    units.add_argument(
+        "-k",
+        dest="units",
+        action="store_const",
+        const="k",
+        help="sizes in 1024-byte units (the default, as for du)",
+    )
+    units.add_argument(
+        "-m",
+        dest="units",
+        action="store_const",
+        const="m",
+        help="sizes in 1048576-byte units",
+    )
+    units.add_argument(
+        "-B",
+        "--block-size",
+        dest="block_size",
+        metavar="SIZE",
+        help="sizes in units of SIZE, e.g. 1M or 1G",
+    )
+    d.add_argument(
+        "--apparent-size",
+        action="store_true",
+        help="accepted, and always in effect: Globus reports file sizes "
+        "(what ls -l shows), not disk blocks used",
     )
     d.add_argument(
         "--sort",
@@ -1312,7 +1459,7 @@ def build_parser(in_shell=False):
         help="ordering (default: size)",
     )
     add_common(d)
-    d.set_defaults(func=cmd_du)
+    d.set_defaults(func=cmd_du, units=None)
 
     size_default = os.environ.get(ARCHIVESCAN_SIZE_VAR) or ARCHIVESCAN_DEFAULT_SIZE
     a = sub.add_parser(
