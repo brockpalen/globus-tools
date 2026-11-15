@@ -158,13 +158,17 @@ class FakeResponse:
 class FakeTransferClient:
     """A Transfer client serving :data:`TREE` and :data:`BOOKMARKS`."""
 
-    def __init__(self, tasks=None, unlistable=()):
+    def __init__(self, tasks=None, unlistable=(), endpoints=(), events=()):
         """Build a stub client.
 
         :param tasks: task documents to return from the admin task list
         :param unlistable: paths that should raise PermissionDenied
+        :param endpoints: monitored endpoint documents, for globus-console
+        :param events: task event documents
         """
         self.tasks = tasks or []
+        self.endpoints = list(endpoints)
+        self.events = list(events)
         self.unlistable = set(unlistable)
         self.ls_calls = []
         self.stat_calls = []
@@ -225,6 +229,38 @@ class FakeTransferClient:
                 return FakeResponse(entry)
         self.ls_calls.pop()
         raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
+
+    def get_task(self, task_id):
+        """One of the user's own tasks, by id.
+
+        :param task_id: the task id
+        :returns: a single-document response, as the SDK returns
+        :raises FakeAPIError: if no such task
+        """
+        for task in self.tasks:
+            if task["task_id"] == task_id:
+                return FakeResponse(dict(task))
+        raise FakeAPIError(404, "TaskNotFound", f"no task {task_id}")
+
+    endpoint_manager_get_task = get_task
+
+    def task_event_list(self, task_id, query_params=None):
+        """The task's events: none in the fake.
+
+        :param task_id: the task id
+        :param query_params: accepted and ignored
+        :returns: an empty list
+        """
+        return list(self.events)
+
+    endpoint_manager_task_event_list = task_event_list
+
+    def endpoint_manager_monitored_endpoints(self):
+        """Collections the identity may monitor.
+
+        :returns: the endpoint documents given to the constructor
+        """
+        return list(self.endpoints)
 
     def get_endpoint(self, collection):
         """Describe a collection, as the API's endpoint document does.

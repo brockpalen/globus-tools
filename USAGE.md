@@ -65,6 +65,18 @@ the directories it skipped on stderr, and then exits 1, as `du` and `find`
 do, so a script knows the result is incomplete. In `globus-fs shell`, a
 script run from stdin exits with the last command's status.
 
+## Names on a terminal
+
+Anyone who can name a file on a shared collection, label a transfer or
+title a collection chooses those characters, and a terminal acts on control
+characters (clearing the screen, retitling the window, faking a prompt). So,
+as GNU `ls` does, names printed to a terminal show them as escapes:
+`report\x1b[2J.txt`. Output to a pipe or file keeps the exact names, and
+so do `--format json`, `find -0` and `find --batch`. Error messages are
+always escaped. In `globus-fs shell`, output that reaches the terminal
+through `| head` and the like is escaped too, and Tab never completes such
+a name.
+
 ## `ls` — list a directory
 
 ```sh

@@ -17,9 +17,11 @@ never logs you out of the other.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timezone
@@ -323,15 +325,17 @@ class Tool:
         :raises SystemExit: always
         """
         gare = _to_gare(e)
+        # API messages quote paths, which can hold any character
+        message = escape_text(e.message)
         if gare is not None:
-            sys.exit(f"{e.code}: {e.message}\n\n" + self._login_advice(gare))
+            sys.exit(f"{e.code}: {message}\n\n" + self._login_advice(gare))
         if e.http_status == 403:
-            sys.exit(f"Permission denied ({e.code}): {e.message}{self.forbidden_hint}")
+            sys.exit(f"Permission denied ({e.code}): {message}{self.forbidden_hint}")
         if e.http_status == 401:
             sys.exit(
-                f"Not authenticated ({e.code}): {e.message}\nRun:  {self.name} login"
+                f"Not authenticated ({e.code}): {message}\nRun:  {self.name} login"
             )
-        sys.exit(f"Transfer API error {e.http_status} ({e.code}): {e.message}")
+        sys.exit(f"Transfer API error {e.http_status} ({e.code}): {message}")
 
     def _login_advice(self, gare) -> str:
         """Say what a login still needs, after one failed or could not run.
@@ -500,6 +504,85 @@ def new_parser(prog, description, epilog):
         epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+
+# --------------------------------------------------------------------------
+# names from Globus, shown safely
+# --------------------------------------------------------------------------
+#: Characters a terminal acts on instead of displaying: C0 and C1 controls
+#: and DEL (cursor movement, screen clearing, window titles, hyperlinks),
+#: and the Unicode direction marks that reorder text on screen. A file
+#: name, task label or bookmark name may contain any of them, and anyone
+#: who can name a file on a shared collection chooses those bytes.
+_UNSAFE = re.compile("[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_NAMED = {"\n": "\\n", "\t": "\\t", "\r": "\\r"}
+
+#: Set by globus-fs shell, which knows where a line's output ends up:
+#: True when it reaches the terminal through a filter, False for a file.
+#: None means decide by whether stdout is a terminal.
+_FORCE_TERMINAL = None
+
+
+def escape_text(text) -> str:
+    """Show control and direction characters as visible escapes.
+
+    ``evil\x1b]0;x\x07`` prints as those characters, not as a command
+    to the terminal. Backslashes are left alone, so ordinary names look
+    the same.
+
+    :param text: anything; converted with ``str``
+    :returns: the text, safe to write to a terminal
+    """
+
+    def visible(match):
+        ch = match.group()
+        if ch in _NAMED:
+            return _NAMED[ch]
+        code = ord(ch)
+        return f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}"
+
+    return _UNSAFE.sub(visible, str(text))
+
+
+def output_is_terminal() -> bool:
+    """Whether stdout will end up on a terminal.
+
+    :returns: the shell's answer if it set one, else ``sys.stdout.isatty()``
+    """
+    if _FORCE_TERMINAL is not None:
+        return _FORCE_TERMINAL
+    try:
+        return sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def safe(text) -> str:
+    """A name for stdout: escaped on a terminal, exact through a pipe.
+
+    The rule GNU ls follows: a terminal never receives raw control
+    characters, while ``find | xargs`` and redirected output get the real
+    name. Machine formats (JSON, ``-0``, ``--batch``) do not use this.
+
+    :param text: anything; converted with ``str``
+    :returns: the text, escaped if stdout is a terminal
+    """
+    return escape_text(text) if output_is_terminal() else str(text)
+
+
+@contextlib.contextmanager
+def terminal_output(value):
+    """Tell :func:`safe` where output is going, for the shell's pipelines.
+
+    :param value: True, False, or None to decide by ``isatty``
+    :returns: a context manager restoring the previous setting
+    """
+    global _FORCE_TERMINAL
+    previous, _FORCE_TERMINAL = _FORCE_TERMINAL, value
+    try:
+        yield
+    finally:
+        _FORCE_TERMINAL = previous
 
 
 def is_uuid(value):

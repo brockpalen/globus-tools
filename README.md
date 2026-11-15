@@ -135,6 +135,9 @@ of the same name wins. Start from
   stops and says so.
 - **Log out when you are done:** `globus-fs logout` revokes your tokens
   with Globus, as Globus advises for its own CLI on high assurance data.
+- **Names cannot attack your terminal.** Control characters in file
+  names, task labels and collection names are shown as escapes on a
+  terminal, as `ls` does; pipes and files get the exact names.
 - **File names are data.** Paths printed by `ls`, `find`, `du` and
   `globus-console` can themselves be CUI or PHI. Before saving output to a
   file, run `umask 077` so only you can read it, and keep it out of shared
