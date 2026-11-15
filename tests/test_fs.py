@@ -169,10 +169,37 @@ def test_du_visits_every_directory_once(run):
 def test_du_continues_past_an_unlistable_directory(run, capsys):
     """A 40 minute walk must not die on its last directory."""
     transfer = FakeTransferClient(unlistable=["/data/project-b/empty"])
-    run(["du", f"{COLL}:/data", "-d", "1", "--no-header"], transfer)
+    with pytest.raises(SystemExit):
+        run(["du", f"{COLL}:/data", "-d", "1", "--no-header"], transfer)
     captured = capsys.readouterr()
     assert "/data" in captured.out
     assert "could not be listed" in captured.err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["du", "-s"],
+        ["find"],
+        ["ls", "-R"],
+        ["archivescan"],
+    ],
+)
+def test_incomplete_walk_exits_1_after_full_output(run, capsys, argv):
+    """Like du and find: everything listable is printed, then status 1."""
+    transfer = FakeTransferClient(unlistable=["/data/project-a/sub1"])
+    with pytest.raises(SystemExit) as caught:
+        run(argv + [f"{COLL}:/data"], transfer)
+    assert caught.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out.strip()  # the rest of the tree was still reported
+    assert "could not be listed" in captured.err
+
+
+@pytest.mark.parametrize("argv", [["du", "-s"], ["find"], ["ls", "-R"]])
+def test_complete_walk_exits_0(run, argv):
+    """No unlistable directory, no error status."""
+    run(argv + [f"{COLL}:/data"])  # returns normally: status 0
 
 
 def test_find_matches_a_name_glob(run, capsys):

@@ -219,9 +219,14 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
 
 
 def _report_walk_errors(args):
-    """Print the directories a walk could not list.
+    """Print the directories a walk could not list, then exit 1 if any.
+
+    Called last, after the command's output, so everything that could be
+    listed is still printed; the status tells a script it is incomplete,
+    as du and find do.
 
     :param args: parsed arguments, carrying the walker that ran
+    :raises SystemExit: with status 1 if any directory could not be listed
     """
     walker = getattr(args, "_walker", None)
     if not walker or not walker.errors:
@@ -234,6 +239,7 @@ def _report_walk_errors(args):
         print(f"  {err}", file=sys.stderr)
     if len(walker.errors) > len(shown):
         print(f"  ... and {len(walker.errors) - len(shown)} more", file=sys.stderr)
+    sys.exit(1)
 
 
 def _entry_matches(args, entry, name, is_dir, min_size, max_size, newer, older):

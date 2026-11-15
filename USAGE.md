@@ -57,6 +57,14 @@ Accepted by most commands.
 | `--format table\|tsv\|csv\|json` | output format; `table` by default |
 | `--no-header` | omit the header row |
 
+## Exit status
+
+0 on success, 1 on an error. A walk (`find`, `du`, `archivescan`, `ls -R`)
+that could not list some directories still prints everything else, names
+the directories it skipped on stderr, and then exits 1, as `du` and `find`
+do, so a script knows the result is incomplete. In `globus-fs shell`, a
+script run from stdin exits with the last command's status.
+
 ## `ls` — list a directory
 
 ```sh
