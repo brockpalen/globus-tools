@@ -111,20 +111,34 @@ def _resolve_target(args, tc):
         path = tail or "/"
         return head, path if path.startswith("/") else "/" + path
 
-    # A personal bookmark wins over a site shortcut, the same way user
-    # config wins over /etc everywhere else.
-    bm = resolve_bookmark(tc, head)
-    if bm is not None:
-        return bm["endpoint_id"], _join_within(bm.get("path"), tail)
-
-    shortcut = site_shortcuts().get(head)
-    if shortcut is not None:
-        return shortcut.collection, _join_within(shortcut.path, tail)
+    found = lookup_name(tc, head)
+    if found is not None:
+        collection, base = found
+        return collection, _join_within(base, tail)
 
     sys.exit(
         f"'{head}' is not a collection UUID, a bookmark or a known "
         f"collection name.\n" + _known_names_hint(tc)
     )
+
+
+def lookup_name(tc, name):
+    """Find a bookmark or collection shortcut by name.
+
+    A personal bookmark wins over a site shortcut, the same way user config
+    wins over /etc everywhere else.
+
+    :param tc: an authenticated Transfer client, for bookmarks
+    :param name: the name typed before the colon
+    :returns: ``(collection_id, base_path)``, or None if nothing has that name
+    """
+    bm = resolve_bookmark(tc, name)
+    if bm is not None:
+        return bm["endpoint_id"], bm.get("path") or "/"
+    shortcut = site_shortcuts().get(name)
+    if shortcut is not None:
+        return shortcut.collection, shortcut.path
+    return None
 
 
 def _known_names_hint(tc):
@@ -458,8 +472,14 @@ def _print_columns(names, width):
 
 
 def _ls_emit(args, rows):
-    """rows is a list of (entry, display_path)."""
-    fmt_size = (lambda n: str(n)) if args.bytes else human_bytes
+    """rows is a list of (entry, display_path).
+
+    Sizes are bytes, as ``ls -l`` prints them, unless ``-h`` or ``--si``.
+    """
+    fmt_size = {
+        "human": human_size,
+        "si": lambda n: human_size(n, 1000),
+    }.get(args.units, str)
 
     if args.format == "json":
         json.dump([e for e, _ in rows], sys.stdout, indent=2, default=str)
@@ -556,11 +576,181 @@ def cmd_ls_fs(args):
     _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
 
 
-def cmd_du(args):
-    """Report cumulative size and file counts per directory.
+def cmd_stat(args):
+    """Show one file or directory's type, size, owner, mode and mtime.
+
+    One ``stat`` call, however big the directory: unlike ``ls``, it never
+    lists contents.
 
     :param args: parsed arguments
     """
+    tc = args.tool.transfer_client(args)
+    collection, path = _resolve_target(args, tc)
+    kwargs = {"local_user": args.local_user} if args.local_user else {}
+    try:
+        entry = args.tool.call(tc.operation_stat, collection, path, **kwargs).data
+    except globus_sdk.TransferAPIError as e:
+        args.tool.api_error(e)
+    if args.format == "json":
+        json.dump(dict(entry, path=path, collection=collection), sys.stdout, indent=2)
+        print()
+        return
+    size = entry.get("size")
+    print(f"  Path: {path}")
+    print(f"  Type: {entry.get('type', '?')}")
+    if entry.get("link_target"):
+        print(f"  Link: -> {entry['link_target']}")
+    if size is not None:
+        print(f"  Size: {size} ({human_bytes(size)})")
+    print(f"  Mode: {_mode_string(entry)}  ({entry.get('permissions') or '?'})")
+    print(f" Owner: {entry.get('user') or '?'}  Group: {entry.get('group') or '?'}")
+    print(f"Modify: {entry.get('last_modified') or '?'}")
+
+
+def human_size(n, base=1024):
+    """Format a byte count the way GNU ``du -h`` (or ``--si``) does.
+
+    Rounded up, never down, so a size is never understated: one decimal
+    below 10 (``1.5G``), whole numbers from there (``234M``), and plain
+    bytes below one unit. Integer arithmetic, so no float rounding.
+
+    :param n: the byte count
+    :param base: 1024 for ``-h``, 1000 for ``--si``
+    :returns: e.g. ``"512"``, ``"4.0K"``, ``"234M"``, ``"1.5G"``
+    """
+    if n < base:
+        return str(n)
+    letters = "KMGTPE" if base == 1024 else "kMGTPE"
+    for power, letter in enumerate(letters, start=1):
+        unit = base**power
+        last = power == len(letters)
+        tenths = -(-n * 10 // unit)  # ceil(n / unit, 1 decimal) * 10
+        if tenths < 100:
+            return f"{tenths // 10}.{tenths % 10}{letter}"
+        whole = -(-n // unit)
+        if whole < base or last:
+            return f"{whole}{letter}"
+    return str(n)  # pragma: no cover - the loop always returns
+
+
+def du_size_format(args):
+    """Choose how du prints a size, from its unit options.
+
+    The default is GNU du's: 1024-byte units, rounded up.
+
+    :param args: parsed arguments
+    :returns: a function from a byte count to its printed form
+    """
+    if args.block_size:
+        block = humanfriendly.parse_size(args.block_size, binary=True)
+        if block < 1:
+            sys.exit(f"du: invalid block size: {args.block_size}")
+        return lambda n: str(-(-n // block))
+    if args.units == "bytes":
+        return str
+    if args.units == "human":
+        return human_size
+    if args.units == "si":
+        return lambda n: human_size(n, 1000)
+    block = 1024**2 if args.units == "m" else 1024
+    return lambda n: str(-(-n // block))
+
+
+def _du_rollup(own, root):
+    """Add each directory's own contents into all of its ancestors.
+
+    :param own: ``{path: [bytes, files, dirs]}`` for each directory's own entries
+    :param root: the walk root, where rolling up stops
+    :returns: ``{path: [bytes, files, dirs]}`` cumulative totals
+    """
+    totals = {}
+    for path, (size, files, dirs) in own.items():
+        node = path
+        while True:
+            acc = totals.setdefault(node, [0, 0, 0])
+            acc[0] += size
+            acc[1] += files
+            acc[2] += dirs
+            if node == root:
+                break
+            parent = posixpath.dirname(node) or "/"
+            if parent == node:
+                break
+            node = parent
+    return totals
+
+
+def _du_depth(path, root):
+    """Depth of a path below the walk root.
+
+    :param path: an absolute path at or below the root
+    :param root: the walk root
+    :returns: 0 for the root itself, 1 for its children, and so on
+    """
+    if path == root:
+        return 0
+    rel = path[len(root) :].strip("/")
+    return len(rel.split("/")) if rel else 0
+
+
+def _du_emit(args, rows, fmt_size):
+    """Print du's rows as a table, TSV, CSV or JSON.
+
+    :param args: parsed arguments
+    :param rows: ``(path, [bytes, files, dirs])`` in display order
+    :param fmt_size: turns a byte count into the printed size
+    """
+    if args.format == "json":
+        json.dump(
+            [{"path": p, "bytes": t[0], "files": t[1], "dirs": t[2]} for p, t in rows],
+            sys.stdout,
+            indent=2,
+        )
+        print()
+        return
+    if args.format in ("tsv", "csv"):
+        writer = csv.writer(
+            sys.stdout,
+            delimiter="\t" if args.format == "tsv" else ",",
+            lineterminator="\n",
+        )
+        if not args.no_header:
+            writer.writerow(["SIZE", "FILES", "DIRS", "PATH"])
+        for p, t in rows:
+            writer.writerow([fmt_size(t[0]), t[1], t[2], p])
+        return
+    width = max([len(fmt_size(t[0])) for _, t in rows] + [4])
+    fwidth = max([len(str(t[1])) for _, t in rows] + [5])
+    dwidth = max([len(str(t[2])) for _, t in rows] + [4])
+    if not args.no_header:
+        print(
+            f"{'SIZE'.rjust(width)}  {'FILES'.rjust(fwidth)}  "
+            f"{'DIRS'.rjust(dwidth)}  PATH"
+        )
+    for p, t in rows:
+        print(
+            f"{fmt_size(t[0]).rjust(width)}  {str(t[1]).rjust(fwidth)}  "
+            f"{str(t[2]).rjust(dwidth)}  {p}"
+        )
+
+
+def cmd_du(args):
+    """Report cumulative size and file counts per directory.
+
+    Sizes are apparent sizes: Globus reports each file's size, not the
+    blocks it occupies, so this is ``du --apparent-size``.
+
+    :param args: parsed arguments
+    """
+    fmt_size = du_size_format(args)
+    if args.summarize:
+        args.depth = 0
+    if args.maxdepth is not None:
+        print(
+            f"du: --maxdepth {args.maxdepth} stops the walk, so totals leave "
+            "out anything deeper; -d/--max-depth limits only what is printed",
+            file=sys.stderr,
+        )
     tc = args.tool.transfer_client(args)
     collection, root = _resolve_target(args, tc)
     root = root.rstrip("/") or "/"
@@ -579,80 +769,21 @@ def cmd_du(args):
         _report_walk_errors(args)
         return
 
-    # roll each directory's own contents up into all of its ancestors
-    totals = {}
-    for path, (size, files, dirs) in own.items():
-        node = path
-        while True:
-            acc = totals.setdefault(node, [0, 0, 0])
-            acc[0] += size
-            acc[1] += files
-            acc[2] += dirs
-            if node == root:
-                break
-            parent = posixpath.dirname(node) or "/"
-            if parent == node:
-                break
-            node = parent
-
-    def depth_of(path):
-        """Depth of a path below the walk root.
-
-        :param path: an absolute path at or below the root
-        :returns: 0 for the root itself, 1 for its children, and so on
-        """
-        if path == root:
-            return 0
-        rel = path[len(root) :].strip("/")
-        return len(rel.split("/")) if rel else 0
-
+    totals = _du_rollup(own, root)
     rows = [
         (p, t)
         for p, t in totals.items()
-        if args.depth is None or depth_of(p) <= args.depth
+        if args.depth is None or _du_depth(p, root) <= args.depth
     ]
-    if args.sort == "size":
-        rows.sort(key=lambda r: r[1][0], reverse=True)
-    elif args.sort == "files":
-        rows.sort(key=lambda r: r[1][1], reverse=True)
-    else:
-        rows.sort(key=lambda r: r[0])
-
-    if args.format == "json":
-        json.dump(
-            [{"path": p, "bytes": t[0], "files": t[1], "dirs": t[2]} for p, t in rows],
-            sys.stdout,
-            indent=2,
-        )
-        print()
-        _report_walk_errors(args)
-        return
-
-    fmt_size = (lambda n: str(n)) if args.bytes else human_bytes
-    if args.format in ("tsv", "csv"):
-        writer = csv.writer(
-            sys.stdout,
-            delimiter="\t" if args.format == "tsv" else ",",
-            lineterminator="\n",
-        )
-        if not args.no_header:
-            writer.writerow(["SIZE", "FILES", "DIRS", "PATH"])
-        for p, t in rows:
-            writer.writerow([fmt_size(t[0]), t[1], t[2], p])
-    else:
-        width = max([len(fmt_size(t[0])) for _, t in rows] + [4])
-        fwidth = max([len(str(t[1])) for _, t in rows] + [5])
-        dwidth = max([len(str(t[2])) for _, t in rows] + [4])
-        if not args.no_header:
-            print(
-                f"{'SIZE'.rjust(width)}  {'FILES'.rjust(fwidth)}  "
-                f"{'DIRS'.rjust(dwidth)}  PATH"
-            )
-        for p, t in rows:
-            print(
-                f"{fmt_size(t[0]).rjust(width)}  {str(t[1]).rjust(fwidth)}  "
-                f"{str(t[2]).rjust(dwidth)}  {p}"
-            )
+    sort_key = {
+        "size": lambda r: -r[1][0],
+        "files": lambda r: -r[1][1],
+        "path": lambda r: r[0],
+    }[args.sort]
+    rows.sort(key=sort_key)
+    if args.total:  # one path, so the grand total is the root's, as du -c
+        rows.append(("total", totals[root]))
+    _du_emit(args, rows, fmt_size)
 
     walker = getattr(args, "_walker", None)
     if args.summary and walker:
@@ -1033,6 +1164,9 @@ your transfers
   tasks, watch, history and task show transfers you submitted. Collection
   administrators wanting everyone's use globus-console.
 
+interactive
+  globus-fs shell [TARGET]   cd around a collection; see: globus-fs shell -h
+
 Full reference, with examples: USAGE.md
 """
 
@@ -1060,12 +1194,61 @@ format:
 A bookmark of the same name takes precedence; --check-bookmarks flags those.
 """
 
+SHELL_EPILOG = """\
+Not a filesystem: nothing is mounted and no file is read. Each command is
+a Globus API call, and the prompt names the collection you are on.
 
-def build_parser():
+  [dataden] /umms-mylab> cd fastq
+  [dataden] /umms-mylab/fastq> ls -l
+  [dataden] /umms-mylab/fastq> find --name '*.gz' | wc -l
+  [dataden] /umms-mylab/fastq> du -h -d 1 > sizes.txt
+
+paths
+  relative, .., -, /absolute, or name:/path or UUID:/path for another
+  collection. Tab completes names.
+
+commands
+  ls stat find du archivescan    as globus-fs, paths relative to here
+  cd                             move around
+  pwd [-u | -v]                  name:path to paste back into cd or globus-fs;
+                                 -u UUID:/path for globus-cli; -v both, and
+                                 the collection's display name
+  collections bookmark tasks task watch history whoami
+  lcd lpwd                       the local directory, for > and >>
+  !command                       run any local command
+  help [command]   exit
+
+| and >
+  Output can go through read-only local filters: wc grep egrep fgrep sort
+  uniq head tail cut tr column nl less more. Anything else after | is
+  refused (use !command). > FILE writes a new local file only you can
+  read and never overwrites one; >> FILE appends.
+
+No history is saved to disk: on high assurance collections, paths are data.
+"""
+
+
+def cmd_shell(args):
+    """Start the interactive shell.
+
+    :param args: parsed arguments
+    """
+    from .shell import GlobusShell
+
+    status = GlobusShell(args.tool, start=args.target).run()
+    if status:
+        sys.exit(status)
+
+
+def build_parser(in_shell=False):
     """Build the globus-fs command line parser.
 
+    :param in_shell: build the parser ``globus-fs shell`` runs each line with:
+        the path argument becomes optional, defaulting to the current
+        directory, and the ``shell`` command itself is left out
     :returns: the configured top-level parser
     """
+    target_nargs = "?" if in_shell else None
     p = new_parser(
         "globus-fs",
         "ls, find and du for Globus collections, plus your own transfers.",
@@ -1081,6 +1264,7 @@ def build_parser():
         """
         sp.add_argument(
             "target",
+            nargs=target_nargs,
             help="COLLECTION_UUID:/path, or a bookmark name "
             "(see the 'bookmark' command)",
         )
@@ -1109,8 +1293,12 @@ def build_parser():
             "--summary", action="store_true", help="print totals to stderr when done"
         )
 
-    lsp = sub.add_parser("ls", help="list a directory on a collection")
-    lsp.add_argument("target", help="COLLECTION_UUID:/path, or a bookmark name")
+    # As for du: GNU ls's letters, so -h is human-readable and help is --help.
+    lsp = sub.add_parser("ls", help="list a directory on a collection", add_help=False)
+    lsp.add_argument("--help", action="help", help="show this help and exit")
+    lsp.add_argument(
+        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+    )
     lsp.add_argument(
         "-l", "--long", action="store_true", help="mode, owner, size and mtime"
     )
@@ -1133,8 +1321,22 @@ def build_parser():
         help="sort by modification time, newest first",
     )
     lsp.add_argument("-r", "--reverse", action="store_true", help="reverse order")
-    lsp.add_argument(
-        "-b", "--bytes", action="store_true", help="raw bytes instead of human units"
+    ls_units = lsp.add_mutually_exclusive_group()
+    ls_units.add_argument(
+        "-h",
+        "--human-readable",
+        dest="units",
+        action="store_const",
+        const="human",
+        help="with -l, sizes like 1.5K 234M 2.0G in powers of 1024; "
+        "bytes otherwise, as for ls",
+    )
+    ls_units.add_argument(
+        "--si",
+        dest="units",
+        action="store_const",
+        const="si",
+        help="like -h, in powers of 1000",
     )
     lsp.add_argument("--no-hidden", action="store_true", help="skip dotfiles")
     lsp.add_argument(
@@ -1156,7 +1358,19 @@ def build_parser():
         help="unlistable directories to print (default: 10)",
     )
     add_common(lsp)
-    lsp.set_defaults(func=cmd_ls_fs, summary=False)
+    lsp.set_defaults(func=cmd_ls_fs, summary=False, units=None)
+
+    st = sub.add_parser(
+        "stat", help="type, size, owner, mode and mtime of one file or directory"
+    )
+    st.add_argument(
+        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+    )
+    st.add_argument(
+        "--local-user", help="map to this local account (GCSv5 mapped collections)"
+    )
+    add_common(st)
+    st.set_defaults(func=cmd_stat)
 
     f = sub.add_parser("find", help="recursive search over a collection")
     add_walk_opts(f)
@@ -1188,13 +1402,80 @@ def build_parser():
     f.add_argument("--limit", type=int, default=0, help="stop after N matches")
     f.set_defaults(func=cmd_find, format="table", no_header=False)
 
-    d = sub.add_parser("du", help="sizes and file counts per directory")
+    # GNU du's options on GNU du's letters; -h is human-readable, as there,
+    # so help is --help only.
+    d = sub.add_parser("du", help="sizes and file counts per directory", add_help=False)
+    d.add_argument("--help", action="help", help="show this help and exit")
     add_walk_opts(d)
     d.add_argument(
-        "-d", "--depth", type=int, help="show totals down to this depth (like du -d)"
+        "-d",
+        "--depth",
+        "--max-depth",
+        dest="depth",
+        type=int,
+        metavar="N",
+        help="print totals down to N levels; everything deeper is still "
+        "counted (du -d, --max-depth)",
     )
     d.add_argument(
-        "-b", "--bytes", action="store_true", help="raw bytes instead of human units"
+        "-s",
+        "--summarize",
+        action="store_true",
+        help="print only the total for the path itself (du -s)",
+    )
+    d.add_argument(
+        "-c", "--total", action="store_true", help="add a grand total line (du -c)"
+    )
+    units = d.add_mutually_exclusive_group()
+    units.add_argument(
+        "-h",
+        "--human-readable",
+        dest="units",
+        action="store_const",
+        const="human",
+        help="sizes like 1.5K 234M 2.0G, in powers of 1024",
+    )
+    units.add_argument(
+        "--si",
+        dest="units",
+        action="store_const",
+        const="si",
+        help="like -h, in powers of 1000",
+    )
+    units.add_argument(
+        "-b",
+        "--bytes",
+        dest="units",
+        action="store_const",
+        const="bytes",
+        help="sizes in bytes",
+    )
+    units.add_argument(
+        "-k",
+        dest="units",
+        action="store_const",
+        const="k",
+        help="sizes in 1024-byte units (the default, as for du)",
+    )
+    units.add_argument(
+        "-m",
+        dest="units",
+        action="store_const",
+        const="m",
+        help="sizes in 1048576-byte units",
+    )
+    units.add_argument(
+        "-B",
+        "--block-size",
+        dest="block_size",
+        metavar="SIZE",
+        help="sizes in units of SIZE, e.g. 1M or 1G",
+    )
+    d.add_argument(
+        "--apparent-size",
+        action="store_true",
+        help="accepted, and always in effect: Globus reports file sizes "
+        "(what ls -l shows), not disk blocks used",
     )
     d.add_argument(
         "--sort",
@@ -1203,7 +1484,7 @@ def build_parser():
         help="ordering (default: size)",
     )
     add_common(d)
-    d.set_defaults(func=cmd_du)
+    d.set_defaults(func=cmd_du, units=None)
 
     size_default = os.environ.get(ARCHIVESCAN_SIZE_VAR) or ARCHIVESCAN_DEFAULT_SIZE
     a = sub.add_parser(
@@ -1286,6 +1567,22 @@ def build_parser():
     bmd.set_defaults(func=cmd_bookmark_delete)
 
     bm.set_defaults(func=lambda a: (bm.print_help(), sys.exit(1)))
+
+    if not in_shell:
+        sh = sub.add_parser(
+            "shell",
+            help="an interactive shell: cd around a collection, run ls, find, "
+            "du with relative paths",
+            epilog=SHELL_EPILOG,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        sh.add_argument(
+            "target",
+            nargs="?",
+            help="where to start: COLLECTION_UUID:/path, or a bookmark or "
+            "collection name",
+        )
+        sh.set_defaults(func=cmd_shell)
 
     tasks.add_task_commands(sub, admin=False)
     TOOL.add_auth_commands(sub)

@@ -206,8 +206,15 @@ class Walker:
             print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
 
     def walk(self, root, maxdepth=None):
-        """Yield (path, depth, entries) for every directory under root."""
-        with cf.ThreadPoolExecutor(max_workers=self.jobs) as pool:
+        """Yield (path, depth, entries) for every directory under root.
+
+        Stopping early -- Ctrl-C, or a consumer that breaks out such as
+        ``find --limit`` -- cancels the listings not yet started and does
+        not wait for the few in flight, so ``globus-fs shell`` is back at
+        its prompt at once.
+        """
+        pool = cf.ThreadPoolExecutor(max_workers=self.jobs)
+        try:
             pending = {pool.submit(self._ls, root): (root, 0)}
             while pending:
                 done, _ = cf.wait(pending, return_when=cf.FIRST_COMPLETED)
@@ -225,6 +232,8 @@ class Walker:
                         if self._descends(e):
                             child = posixpath.join(path, e["name"])
                             pending[pool.submit(self._ls, child)] = (child, depth + 1)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     def _descends(self, entry):
         """Whether the walk should list this entry's contents.
