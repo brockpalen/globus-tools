@@ -23,6 +23,7 @@ import stat
 
 __all__ = [
     "UnsafeTokenFile",
+    "check_shortcut_file",
     "check_token_file",
     "ensure_globus_dir",
     "private_directory",
@@ -92,3 +93,57 @@ def private_directory(path: str) -> None:
         return
     if st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) != 0o700:
         os.chmod(path, 0o700)
+
+
+def check_shortcut_file(path: str, personal: bool) -> tuple[bool, str | None]:
+    """Decide whether a collection shortcuts file can be trusted.
+
+    A shortcut decides which collection a name like ``dataden:`` reaches,
+    so whoever can change the file can send someone's ls, mkdir and mv to
+    a collection of their choosing. The rule depends on whose file it is:
+
+    - **personal** (``~/.globus/.../collections.conf``): the token file's
+      rule. Another user's file is ignored; group or other write access is
+      removed, with a warning.
+    - **shared** (``/etc/globus-fs``, ``$GLOBUS_FS_COLLECTIONS``): a lab's
+      file reached through its own module may be group-writable -- whoever
+      can edit that module can already change its users' PATH -- but a
+      file anyone can write is ignored.
+
+    Either way, a file in a directory anyone can write, without the sticky
+    bit, could be replaced, and is ignored.
+
+    :param path: the shortcuts file; it need not exist
+    :param personal: True for the user's own file
+    :returns: ``(usable, warning)``; warning is None if there is nothing to say
+    """
+    try:
+        st = os.stat(path)
+        parent = os.stat(os.path.dirname(os.path.abspath(path)))
+    except OSError:
+        return True, None  # missing or unreadable: nothing is read from it
+    mode = stat.filemode(st.st_mode)
+    if parent.st_mode & stat.S_IWOTH and not parent.st_mode & stat.S_ISVTX:
+        return False, (
+            f"ignoring {path}: its directory is writable by anyone, so the "
+            "file could be replaced"
+        )
+    if personal:
+        if st.st_uid != os.geteuid():
+            return False, (
+                f"ignoring {path}: owned by uid {st.st_uid}, not you "
+                f"(uid {os.geteuid()}); your shortcuts file must be your own"
+            )
+        if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            os.chmod(path, stat.S_IMODE(st.st_mode) & ~0o022)
+            return True, (
+                f"{path} was writable by others ({mode}); removed group and "
+                "other write. Check it holds only the shortcuts you expect."
+            )
+        return True, None
+    if st.st_mode & stat.S_IWOTH:
+        return False, (
+            f"ignoring {path}: anyone can write it ({mode}), so anyone could "
+            "redirect its shortcuts"
+        )
+    return True, None

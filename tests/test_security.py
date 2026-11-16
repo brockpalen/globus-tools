@@ -1,4 +1,4 @@
-"""The token file guard, and the SDK pieces it wraps.
+"""The token and shortcut file guards, and the SDK pieces they wrap.
 
 The rule matches archivetar (brockpalen/archivetar#49): the token file must
 be 600 and is tightened with a warning if not; ``~/.globus`` is shared with
@@ -15,6 +15,8 @@ from globus_sdk.login_flows import CommandLineLoginFlowEOFError
 from globus_sdk.token_storage import JSONTokenStorage
 
 from globus_tools import common, security
+from globus_tools import shortcuts as _shortcuts
+from globus_tools.security import check_shortcut_file
 
 
 def mode(path):
@@ -187,3 +189,102 @@ def test_login_prompt_without_input_explains_itself(flow, monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
     with pytest.raises(CommandLineLoginFlowEOFError):
         flow.prompt_for_code()
+
+
+# ---- collection shortcut files ------------------------------------------------
+LINE = "lab = 11111111-1111-1111-1111-111111111111\n"
+
+
+def _file(tmp_path, mode, name="collections.conf"):
+    """Write a shortcuts file with a given mode.
+
+    :param tmp_path: pytest's temporary directory
+    :param mode: the permission bits
+    :param name: the file name
+    :returns: its path, as a string
+    """
+    path = tmp_path / name
+    path.write_text(LINE)
+    os.chmod(path, mode)
+    return str(path)
+
+
+def test_personal_file_private_is_fine(tmp_path):
+    """600 or 644: yours, nobody else can change it."""
+    assert check_shortcut_file(_file(tmp_path, 0o644), personal=True) == (True, None)
+
+
+def test_personal_file_group_writable_is_tightened(tmp_path):
+    """Like the token file: write access for others is removed, with a warning."""
+    path = _file(tmp_path, 0o664)
+    usable, warning = check_shortcut_file(path, personal=True)
+    assert usable and "removed group and other write" in warning
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
+
+
+def test_personal_file_owned_by_someone_else_is_ignored(tmp_path, monkeypatch):
+    """Another user's file is not yours to trust or to fix."""
+    path = _file(tmp_path, 0o644)
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(path).st_uid + 1)
+    usable, warning = check_shortcut_file(path, personal=True)
+    assert not usable and "not you" in warning
+
+
+def test_shared_file_group_writable_is_fine(tmp_path):
+    """A lab's file, reached through its own module, may be group-writable."""
+    assert check_shortcut_file(_file(tmp_path, 0o664), personal=False) == (True, None)
+
+
+def test_shared_file_world_writable_is_ignored(tmp_path):
+    """Anyone could redirect its shortcuts."""
+    usable, warning = check_shortcut_file(_file(tmp_path, 0o666), personal=False)
+    assert not usable and "anyone can write it" in warning
+
+
+def test_file_in_a_world_writable_directory_is_ignored(tmp_path):
+    """Without the sticky bit, anyone could replace the file."""
+    shared = tmp_path / "open"
+    shared.mkdir()
+    path = _file(shared, 0o644)
+    os.chmod(shared, 0o777)
+    usable, warning = check_shortcut_file(path, personal=False)
+    assert not usable and "could be replaced" in warning
+
+
+def test_sticky_world_writable_directory_is_fine(tmp_path):
+    """/tmp-style: the sticky bit stops others replacing your file."""
+    shared = tmp_path / "sticky"
+    shared.mkdir()
+    path = _file(shared, 0o644)
+    os.chmod(shared, 0o1777)
+    assert check_shortcut_file(path, personal=False) == (True, None)
+
+
+def test_missing_file_is_fine(tmp_path):
+    """Nothing to read, nothing to check."""
+    assert check_shortcut_file(str(tmp_path / "absent"), personal=True) == (True, None)
+
+
+def test_ignored_file_loses_its_shortcuts_only(tmp_path, monkeypatch, capsys):
+    """A world-writable module file is skipped; the user's file still works."""
+    _shortcuts._WARNED.clear()
+    shared = _file(tmp_path, 0o666, "lab.conf")
+    mine = tmp_path / "mine.conf"
+    mine.write_text("own = 22222222-2222-2222-2222-222222222222\n")
+    monkeypatch.setenv(_shortcuts.ENV_VAR, shared)
+    monkeypatch.delenv(_shortcuts.SHORTCUTS_VAR, raising=False)
+    monkeypatch.setattr(_shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    loaded = _shortcuts.load(str(mine))
+    assert "own" in loaded and "lab" not in loaded
+    assert "anyone can write it" in capsys.readouterr().err
+
+
+def test_warning_is_shown_once_per_run(tmp_path, monkeypatch, capsys):
+    """The shell loads shortcuts for every prompt; warn once."""
+    _shortcuts._WARNED.clear()
+    shared = _file(tmp_path, 0o666, "lab.conf")
+    monkeypatch.setenv(_shortcuts.ENV_VAR, shared)
+    monkeypatch.setattr(_shortcuts, "DEFAULT_SITE_FILE", str(tmp_path / "absent"))
+    for _ in range(3):
+        _shortcuts.load()
+    assert capsys.readouterr().err.count("anyone can write it") == 1

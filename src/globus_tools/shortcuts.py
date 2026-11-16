@@ -29,6 +29,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
+
+from . import security
+from .common import escape_text
 
 __all__ = [
     "DEFAULT_SITE_FILE",
@@ -215,16 +219,32 @@ def load(user_file: str | None = None) -> dict[str, Shortcut]:
         merged.update(_read(path))
     merged.update(from_environment())
     if user_file:
-        merged.update(_read(user_file))
+        merged.update(_read(user_file, personal=True))
     return merged
 
 
-def _read(path: str) -> dict[str, Shortcut]:
-    """Parse one shortcut file, treating a missing or unreadable one as empty.
+#: Warnings already shown this run: load() runs for every name looked up,
+#: and the shell looks names up for each prompt.
+_WARNED: set[str] = set()
+
+
+def _read(path: str, personal: bool = False) -> dict[str, Shortcut]:
+    """Parse one shortcut file, if it can be trusted.
+
+    A missing or unreadable file is empty. One that fails
+    :func:`~globus_tools.security.check_shortcut_file` is skipped with a
+    warning rather than fatal: losing some names beats losing the tool.
 
     :param path: the file to read
+    :param personal: True for the user's own file
     :returns: mapping of name to :class:`Shortcut`
     """
+    usable, warning = security.check_shortcut_file(path, personal)
+    if warning and warning not in _WARNED:
+        _WARNED.add(warning)
+        print(f"globus-fs: {escape_text(warning)}", file=sys.stderr)
+    if not usable:
+        return {}
     try:
         with open(path, encoding="utf-8") as handle:
             text = handle.read()
