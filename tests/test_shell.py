@@ -630,3 +630,10 @@ def test_messages_keep_their_line_breaks(at_data, client, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "\\n" not in err and "\\r" not in err  # no literal escapes
     assert "\nEndpoint: umich#greatlakes\nDetails:" in err
+
+
+def test_redirect_to_dev_null_is_allowed(at_data, capsys):
+    """noclobber protects regular files; > /dev/null always works, as in bash."""
+    at_data.onecmd("ls > /dev/null")
+    assert at_data.status == 0
+    assert "never overwrites" not in capsys.readouterr().err

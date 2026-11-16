@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import cmd
 import contextlib
+import fnmatch
 import io
 import os
 import posixpath
 import shlex
+import stat
 import subprocess  # nosec B404 - runs the allow-listed filters, without a shell
 import sys
 import time
@@ -43,6 +45,13 @@ PATH_COMMANDS = frozenset(("ls", "stat", "find", "du", "archivescan"))
 
 #: Commands taking several paths, each resolved; they change the collection.
 WRITE_COMMANDS = frozenset(("mkdir", "mv"))
+
+#: Commands whose path arguments expand *, ? and [...] against the
+#: collection, as bash does locally. Not find: its patterns are for --name.
+GLOB_COMMANDS = frozenset(("ls", "stat", "du", "archivescan", "mv", "cd"))
+
+#: Of those, the ones taking a single path.
+ONE_PATH = frozenset(("archivescan", "cd"))
 
 #: find's familiar single-dash spellings, mapped to globus-fs options.
 FIND_ALIASES = {
@@ -114,10 +123,140 @@ def split_line(line):
     if quote:
         raise ShellError("unterminated quote")
     stages.append("".join(current))
-    words = [shlex.split(stage) for stage in stages]
+    words = [parse_words(stage) for stage in stages]
     if any(not w for w in words):
         raise ShellError("nothing on one side of a |")
     return words[0], words[1:], redirect
+
+
+class Word(str):
+    """One word of a command line, remembering what was quoted.
+
+    Compares and behaves as the plain text. ``glob`` is an fnmatch pattern
+    if the word holds an unquoted ``*``, ``?`` or ``[...]``, with quoted
+    wildcard characters escaped, else None.
+    """
+
+    glob = None
+    parts = ()
+
+    @classmethod
+    def from_chars(cls, chars):
+        """Build a word from ``(character, quoted)`` pairs.
+
+        :param chars: the characters, each with whether it was quoted
+        :returns: a :class:`Word`, with ``glob`` and, per ``/``-separated
+            part, ``parts`` as ``(text, pattern or None)``
+        """
+        word = cls("".join(c for c, _ in chars))
+        word.glob = _pattern(chars)
+        if word.glob is not None:
+            pieces, current = [], []
+            for pair in chars:
+                if pair[0] == "/":
+                    pieces.append(current)
+                    current = []
+                else:
+                    current.append(pair)
+            pieces.append(current)
+            word.parts = tuple(
+                ("".join(c for c, _ in piece), _pattern(piece)) for piece in pieces
+            )
+        return word
+
+
+def _pattern(chars):
+    """The fnmatch pattern for some characters, or None if none are wild.
+
+    :param chars: ``(character, quoted)`` pairs
+    :returns: the pattern, quoted wildcards escaped, or None
+    """
+    free = [c for c, quoted in chars if not quoted]
+    text = "".join(c for c, _ in chars)
+    if "*" in free or "?" in free or ("[" in free and "]" in text[text.find("[") :]):
+        return "".join(f"[{c}]" if quoted and c in "*?[" else c for c, quoted in chars)
+    return None
+
+
+def parse_words(text):
+    """Split a stage into words as a shell would: quotes, backslashes, braces.
+
+    :param text: one stage of a line, quotes and backslashes as typed
+    :returns: a list of :class:`Word`
+    :raises ShellError: on an unterminated quote
+    """
+    words, current, quote = [], None, None
+    i = 0
+    while i < len(text):
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < len(text) else None
+        if quote == "'":
+            if c == "'":
+                quote = None
+            else:
+                current.append((c, True))
+        elif quote == '"':
+            if c == '"':
+                quote = None
+            elif c == "\\" and nxt is not None and nxt in '"\\`$':
+                current.append((nxt, True))
+                i += 1
+            else:
+                current.append((c, True))
+        elif c in " \t":
+            if current is not None:
+                words.append(current)
+                current = None
+        else:
+            if current is None:
+                current = []
+            if c in "'\"":
+                quote = c
+            elif c == "\\" and nxt is not None:
+                current.append((nxt, True))
+                i += 1
+            else:
+                current.append((c, False))
+        i += 1
+    if quote:
+        raise ShellError("unterminated quote")
+    if current is not None:
+        words.append(current)
+    return [Word.from_chars(w) for chars in words for w in expand_braces(chars)]
+
+
+def expand_braces(chars):
+    """Expand unquoted ``{a,b}`` as bash does: ``x{1,2}`` is ``x1 x2``.
+
+    A brace pair without an unquoted comma at its own level is left as
+    text, as in bash; expansion nests and repeats.
+
+    :param chars: one word's ``(character, quoted)`` pairs
+    :returns: the list of words it expands to
+    """
+    depth, start, commas = 0, None, []
+    for i, (c, quoted) in enumerate(chars):
+        if quoted:
+            continue
+        if c == "{":
+            if depth == 0:
+                start, commas = i, []
+            depth += 1
+        elif c == "," and depth == 1:
+            commas.append(i)
+        elif c == "}" and depth:
+            depth -= 1
+            if depth == 0:
+                if not commas:
+                    start = None
+                    continue
+                head, tail = chars[:start], chars[i + 1 :]
+                bounds = [start] + commas + [i]
+                out = []
+                for left, right in zip(bounds, bounds[1:]):
+                    out += expand_braces(head + chars[left + 1 : right] + tail)
+                return out
+    return [chars]
 
 
 def check_filter(argv):
@@ -155,9 +294,15 @@ def open_redirect(name, append):
     :returns: a binary file object
     :raises ShellError: if ``>`` would overwrite, or the file cannot be opened
     """
+    path = os.path.expanduser(name)
     flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_EXCL)
     try:
-        fd = os.open(os.path.expanduser(name), flags, 0o600)
+        if not append and not stat.S_ISREG(os.stat(path).st_mode):
+            flags = os.O_WRONLY  # /dev/null and the like: noclobber is for files
+    except OSError:
+        pass  # does not exist yet: create it
+    try:
+        fd = os.open(path, flags, 0o600)
     except FileExistsError:
         raise ShellError(
             f"{name} exists, and > never overwrites: use >> to append, "
@@ -344,18 +489,23 @@ class GlobusShell(cmd.Cmd):
             return title if len(title) <= 32 else title[:31] + "\u2026"
         return collection[:8]
 
-    def _listing(self, collection, path):
-        """List a directory for tab completion, reusing a recent listing.
+    def _listing(self, collection, path, login=False):
+        """List a directory for completion or globbing, reusing a recent one.
 
         :param collection: the collection UUID
         :param path: the absolute directory path
+        :param login: log in again if the collection asks (globbing); never
+            for Tab completion, which must not start a sign-in
         :returns: the listing entries
         """
         now = time.monotonic()
         hit = self._cache.get((collection, path))
         if hit and now - hit[0] < COMPLETION_TTL:
             return hit[1]
-        entries = list(self.tc.operation_ls(collection, path=path))
+        if login:
+            entries = list(self.tool.call(self.tc.operation_ls, collection, path=path))
+        else:
+            entries = list(self.tc.operation_ls(collection, path=path))
         self._cache[(collection, path)] = (now, entries)
         return entries
 
@@ -510,7 +660,10 @@ class GlobusShell(cmd.Cmd):
         :param words: the command and its arguments
         :returns: True to leave the shell
         """
-        name, rest = words[0], words[1:]
+        name = words[0]
+        if name in GLOB_COMMANDS:
+            words = [name] + self.expand_words(name, words[1:])
+        rest = words[1:]
         if name in ("exit", "quit"):
             return True
         builtin = getattr(self, f"builtin_{name}", None)
@@ -525,8 +678,13 @@ class GlobusShell(cmd.Cmd):
             words = [FIND_ALIASES.get(w, w) for w in words]
         args = self.parser.parse_args(words)
         if name in PATH_COMMANDS:
-            collection, path, _ = self.resolve(args.target)
-            args.target = f"{collection}:{path}"
+            if isinstance(args.target, list):  # ls, stat, du: several paths
+                args.target = [
+                    "%s:%s" % self.resolve(t)[:2] for t in args.target or [None]
+                ]
+            else:
+                collection, path, _ = self.resolve(args.target)
+                args.target = f"{collection}:{path}"
         if name not in WRITE_COMMANDS:
             self.tool.dispatch(args)
             return False
@@ -538,6 +696,96 @@ class GlobusShell(cmd.Cmd):
             if name == "mv":
                 self._check_cwd()
         return False
+
+    # ---- globs ------------------------------------------------------------
+    def expand_words(self, command, words):
+        """Expand wildcards in path arguments against the collection.
+
+        Options (``-x``, ``--x``) and words without unquoted wildcards pass
+        through. A pattern that matches nothing is an error, as with bash's
+        failglob: passing it on would only end in "not found".
+
+        :param command: the command, for its one-path rule
+        :param words: the words after the command name
+        :returns: the words, each pattern replaced by its sorted matches
+        :raises ShellError: for no match, or several for a one-path command
+        """
+        out = []
+        for word in words:
+            if getattr(word, "glob", None) is None or word.startswith("-"):
+                out.append(word)
+                continue
+            matches = self.expand(word)
+            if not matches:
+                raise ShellError(f"no match: {escape_text(word)}")
+            if command in ONE_PATH and len(matches) > 1:
+                raise ShellError(
+                    f"{command} takes one path; {escape_text(word)} matches "
+                    f"{len(matches)}"
+                )
+            out += matches
+        return out
+
+    def expand(self, word):
+        """Expand one pattern, one directory level at a time, as bash does.
+
+        ``*`` does not match a leading dot unless the pattern starts with
+        one, and a wildcard level before the last matches directories only.
+
+        :param word: a :class:`Word` with a ``glob``
+        :returns: the matching paths, written the way the pattern was
+        """
+        parts = list(word.parts)
+        prefix = ""
+        head, sep, rest = parts[0][0].partition(":")
+        if sep and head and parts[0][1] is not None and self._is_location(head):
+            # name:*.tar -- the name is literal, the rest a pattern
+            prefix = head + ":"
+            parts[0] = (rest, word.glob.split("/")[0][len(prefix) :] or None)
+        first = next(i for i, (_, pat) in enumerate(parts) if pat is not None)
+        literal = "/".join(text for text, _ in parts[:first])
+        lead = prefix + (literal + "/" if first else "")
+        collection, base, _ = self.resolve(lead or None)
+        found = [("", base)]
+        remaining = parts[first:]
+        for index, (text, pattern) in enumerate(remaining):
+            last = index == len(remaining) - 1
+            step = []
+            for shown, path in found:
+                joiner = "" if not shown else "/"
+                if pattern is None:
+                    step.append((shown + joiner + text, posixpath.join(path, text)))
+                    continue
+                for entry in self._entries(collection, path):
+                    name = entry.get("name", "")
+                    if name.startswith(".") and not pattern.startswith("."):
+                        continue
+                    if not last and entry.get("type") != "dir":
+                        continue
+                    if fnmatch.fnmatchcase(name, pattern):
+                        step.append((shown + joiner + name, posixpath.join(path, name)))
+            found = step
+        return sorted(lead + shown for shown, _ in found)
+
+    def _is_location(self, head):
+        """Whether ``head`` before a colon names a collection.
+
+        :param head: the text before the first colon
+        :returns: True for a UUID, bookmark or collection shortcut
+        """
+        return is_uuid(head) or fs.lookup_name(self.tc, head) is not None
+
+    def _entries(self, collection, path):
+        """List a directory for globbing; an unlistable one matches nothing.
+
+        :param collection: the collection UUID
+        :param path: the directory
+        :returns: its entries, or an empty list
+        """
+        try:
+            return self._listing(collection, path, login=True)
+        except globus_sdk.GlobusAPIError:
+            return []
 
     def _check_cwd(self):
         """After an mv, say so if the current directory is no longer there."""
