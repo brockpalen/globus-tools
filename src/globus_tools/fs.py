@@ -628,6 +628,176 @@ def cmd_stat(args):
     print(f"Modify: {entry.get('last_modified') or '?'}")
 
 
+def _resolve_spec(args, tc, spec):
+    """Resolve one ``UUID:/path`` or ``name:path`` string.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param spec: the target as typed
+    :returns: ``(collection, absolute_path)``
+    """
+    collection, path = _resolve_target(argparse.Namespace(target=spec), tc)
+    return collection, posixpath.normpath(path) if path != "/" else path
+
+
+def _stat_or_none(args, tc, collection, path):
+    """Stat a path, or None if it does not exist.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param collection: the collection UUID
+    :param path: the absolute path
+    :returns: the entry document, or None for a 404
+    """
+    try:
+        return args.tool.call(tc.operation_stat, collection, path).data
+    except globus_sdk.TransferAPIError as e:
+        if e.http_status == 404:
+            return None
+        args.tool.api_error(e)
+
+
+def cmd_mkdir(args):
+    """Create directories, and with ``-p`` any missing parents.
+
+    :param args: parsed arguments
+    """
+    tc = args.tool.transfer_client(args)
+    for spec in args.paths:
+        collection, path = _resolve_spec(args, tc, spec)
+        if args.parents:
+            # create each missing ancestor, top down; an existing directory
+            # is fine, an existing file in the way is not
+            parts = [p for p in path.split("/") if p]
+            for i in range(1, len(parts) + 1):
+                prefix = "/" + "/".join(parts[:i])
+                entry = _stat_or_none(args, tc, collection, prefix)
+                if entry is None:
+                    _mkdir_one(args, tc, collection, prefix)
+                elif entry.get("type") != "dir":
+                    sys.exit(f"mkdir: {safe(prefix)}: exists and is not a directory")
+        else:
+            _mkdir_one(args, tc, collection, path)
+
+
+def _mkdir_one(args, tc, collection, path):
+    """Create one directory.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param collection: the collection UUID
+    :param path: the absolute path to create
+    """
+    try:
+        args.tool.call(tc.operation_mkdir, collection, path)
+    except globus_sdk.TransferAPIError as e:
+        args.tool.api_error(e)
+    if args.verbose:
+        print(f"mkdir: created directory {safe(path)}")
+
+
+def _crosses_filesystems(error):
+    """Whether a rename failed because it would cross filesystems.
+
+    Globus passes the server's error through: EXDEV, "Invalid cross-device
+    link", GridFTP errno 18.
+
+    :param error: the Transfer API error
+    :returns: True if the message names a cross-device rename
+    """
+    text = f"{error.code} {error.message}".lower()
+    return "cross-device" in text or "exdev" in text or "errno: 18" in text
+
+
+CROSS_FILESYSTEM_HELP = (
+    "the source and destination are on different filesystems within this "
+    "collection, and a rename cannot cross between them. Copy, then delete "
+    "the original: globus transfer, then globus delete."
+)
+
+
+def cmd_mv(args):
+    """Rename or move within one collection, never overwriting.
+
+    ``mv SRC DEST`` renames; if DEST is an existing directory, each SRC is
+    moved into it. Between collections a transfer is needed, so that is
+    refused, as is replacing anything that exists.
+
+    :param args: parsed arguments
+    :raises SystemExit: with status 1 if any source could not be moved
+    """
+    if len(args.paths) < 2:
+        sys.exit("mv: needs a source and a destination")
+    tc = args.tool.transfer_client(args)
+    resolved = [_resolve_spec(args, tc, spec) for spec in args.paths]
+    *sources, (collection, dest) = resolved
+    if any(c != collection for c, _ in sources):
+        sys.exit(
+            "mv: source and destination are on different collections; "
+            "moving between collections is a transfer (globus transfer)"
+        )
+    dest_entry = _stat_or_none(args, tc, collection, dest)
+    into = dest_entry is not None and dest_entry.get("type") == "dir"
+    if len(sources) > 1 and not into:
+        sys.exit(f"mv: {safe(dest)}: is not a directory")
+    failed = False
+    for _, src in sources:
+        target = posixpath.join(dest, posixpath.basename(src)) if into else dest
+        problem = _mv_problem(args, tc, collection, src, target, into, dest_entry)
+        if problem:
+            print(f"mv: {problem}", file=sys.stderr)
+            failed = True
+            continue
+        try:
+            args.tool.call(tc.operation_rename, collection, src, target)
+        except globus_sdk.TransferAPIError as e:
+            if _crosses_filesystems(e):
+                reason = CROSS_FILESYSTEM_HELP
+            elif globus_fs._needs_login(e):
+                args.tool.api_error(e)  # needs a login: explain and stop
+            else:
+                reason = escape_text(e.message)
+            print(
+                f"mv: cannot move {escape_text(src)} to {escape_text(target)}: "
+                f"{reason}",
+                file=sys.stderr,
+            )
+            failed = True
+            continue
+        if args.verbose:
+            print(f"renamed {safe(src)} -> {safe(target)}")
+    if failed:
+        sys.exit(1)
+
+
+def _mv_problem(args, tc, collection, src, target, into, dest_entry):
+    """Why a move must not happen, or None if it may.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param collection: the collection UUID
+    :param src: the absolute source path
+    :param target: the absolute path it would end up at
+    :param into: True if moving into an existing directory
+    :param dest_entry: the destination's entry, or None if it is absent
+    :returns: a message for the user, or None
+    """
+    if src == "/":
+        return "cannot move the collection root"
+    if target == src:
+        return f"{escape_text(src)} and {escape_text(target)} are the same path"
+    if target.startswith(src.rstrip("/") + "/"):
+        return f"cannot move {escape_text(src)} into itself"
+    exists = (
+        _stat_or_none(args, tc, collection, target) is not None
+        if into
+        else dest_entry is not None
+    )
+    if exists:
+        return f"{escape_text(target)} exists, and mv never overwrites"
+    return None
+
+
 def human_size(n, base=1024):
     """Format a byte count the way GNU ``du -h`` (or ``--si``) does.
 
@@ -1235,6 +1405,7 @@ paths
 
 commands
   ls stat find du archivescan    as globus-fs, paths relative to here
+  mkdir mv                       likewise; mv never overwrites
   cd                             move around
   pwd [-u | -v]                  name:path to paste back into cd or globus-fs;
                                  -u UUID:/path for globus-cli; -v both, and
@@ -1397,6 +1568,35 @@ def build_parser(in_shell=False):
     )
     add_common(st)
     st.set_defaults(func=cmd_stat)
+
+    mk = sub.add_parser("mkdir", help="create directories on a collection")
+    mk.add_argument(
+        "paths", nargs="+", metavar="DIR", help="COLLECTION_UUID:/path or name:path"
+    )
+    mk.add_argument(
+        "-p",
+        "--parents",
+        action="store_true",
+        help="create missing parent directories; no error if it exists",
+    )
+    mk.add_argument(
+        "-v", "--verbose", action="store_true", help="print each directory created"
+    )
+    mk.set_defaults(func=cmd_mkdir)
+
+    mv = sub.add_parser(
+        "mv",
+        help="rename, or move into a directory, within one collection; "
+        "never overwrites",
+    )
+    mv.add_argument(
+        "paths",
+        nargs="+",
+        metavar="PATH",
+        help="SRC DEST, or SRC... DIR; COLLECTION_UUID:/path or name:path",
+    )
+    mv.add_argument("-v", "--verbose", action="store_true", help="print each rename")
+    mv.set_defaults(func=cmd_mv)
 
     f = sub.add_parser("find", help="recursive search over a collection")
     add_walk_opts(f)

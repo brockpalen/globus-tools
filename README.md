@@ -10,8 +10,9 @@ product.
 | **`globus-fs`** | everyone | a Globus login |
 | **`globus-console`** | anyone with an activity role | `activity_monitor` or `activity_manager` on a subscribed collection |
 
-**`globus-fs`** is `ls`, `find`, `du` and `archivescan` for storage reachable
-only through Globus, plus your bookmarks and your own transfers:
+**`globus-fs`** is `ls`, `find`, `du`, `archivescan`, `mkdir` and `mv` for
+storage reachable only through Globus, plus your bookmarks and your own
+transfers:
 
 ```
 $ globus-fs du -h dataden:/umms-mylab -d 1

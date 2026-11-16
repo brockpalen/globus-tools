@@ -158,16 +158,21 @@ class FakeResponse:
 class FakeTransferClient:
     """A Transfer client serving :data:`TREE` and :data:`BOOKMARKS`."""
 
-    def __init__(self, tasks=None, unlistable=(), endpoints=(), events=()):
+    def __init__(self, tasks=None, unlistable=(), endpoints=(), events=(), exdev=()):
         """Build a stub client.
 
         :param tasks: task documents to return from the admin task list
         :param unlistable: paths that should raise PermissionDenied
         :param endpoints: monitored endpoint documents, for globus-console
         :param events: task event documents
+        :param exdev: destination parents a rename into fails as cross-device
         """
         self.tasks = tasks or []
         self.endpoints = list(endpoints)
+        self.exdev = set(exdev)
+        self._own_tree = None  # copied from TREE on the first write
+        self.mkdir_calls = []
+        self.rename_calls = []
         self.events = list(events)
         self.unlistable = set(unlistable)
         self.ls_calls = []
@@ -188,8 +193,9 @@ class FakeTransferClient:
         self.ls_calls.append(path)
         if path in self.unlistable:
             raise FakeAPIError(403, "PermissionDenied", f"denied: {path}")
-        key = path if path in TREE else (path.rstrip("/") or "/")
-        if key not in TREE:
+        tree = self.tree
+        key = path if path in tree else (path.rstrip("/") or "/")
+        if key not in tree:
             raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
         # "dirlink"/"filelink" model what Globus returns for a symlink: the
         # target's type, plus a link_target
@@ -204,8 +210,81 @@ class FakeTransferClient:
                 "group": "hpcstaff",
                 "link_target": "/elsewhere" if kind.endswith("link") else None,
             }
-            for name, kind, size in TREE[key]
+            for name, kind, size in tree[key]
         ]
+
+    @property
+    def tree(self):
+        """The tree served: the shared TREE until something is written.
+
+        :returns: ``{dir: [(name, kind, size), ...]}``
+        """
+        return TREE if self._own_tree is None else self._own_tree
+
+    def _writable_tree(self):
+        """Copy TREE on the first write, so no test changes another's tree.
+
+        :returns: this client's own tree
+        """
+        if self._own_tree is None:
+            self._own_tree = {k: list(v) for k, v in TREE.items()}
+        return self._own_tree
+
+    def operation_mkdir(self, collection, path, **kwargs):
+        """Create a directory in this client's tree.
+
+        :param collection: the collection id, unused
+        :param path: the directory to create
+        :param kwargs: accepted and ignored
+        :returns: a response, as the API's
+        :raises FakeAPIError: if the parent is missing or the name is taken
+        """
+        self.mkdir_calls.append(path)
+        tree = self._writable_tree()
+        parent, name = path.rstrip("/").rsplit("/", 1)
+        parent = parent or "/"
+        if parent not in tree:
+            raise FakeAPIError(404, "ClientError.NotFound", f"no such path {parent}")
+        if any(n == name for n, _, _ in tree[parent]):
+            raise FakeAPIError(
+                409, "ExternalError.MkdirFailed.Exists", f"{path} already exists"
+            )
+        tree[parent].append((name, "dir", 0))
+        tree[path.rstrip("/")] = []
+        return FakeResponse({"code": "DirectoryCreated"})
+
+    def operation_rename(self, collection, oldpath, newpath, **kwargs):
+        """Rename within this client's tree, moving a directory's subtree.
+
+        :param collection: the collection id, unused
+        :param oldpath: the existing path
+        :param newpath: the new path
+        :param kwargs: accepted and ignored
+        :returns: a response, as the API's
+        :raises FakeAPIError: if the source is missing, the destination's
+            parent is in ``exdev``, or the destination exists
+        """
+        self.rename_calls.append((oldpath, newpath))
+        tree = self._writable_tree()
+        old_parent, old_name = oldpath.rsplit("/", 1)
+        new_parent, new_name = newpath.rsplit("/", 1)
+        old_parent, new_parent = old_parent or "/", new_parent or "/"
+        if new_parent in self.exdev:
+            raise FakeAPIError(
+                502,
+                "ExternalError.RenameFailed",
+                "Rename failed: Invalid cross-device link\n550-GridFTP-Errno: 18",
+            )
+        entry = next((e for e in tree.get(old_parent, []) if e[0] == old_name), None)
+        if entry is None:
+            raise FakeAPIError(404, "ClientError.NotFound", f"no such path {oldpath}")
+        if any(n == new_name for n, _, _ in tree.get(new_parent, [])):
+            raise FakeAPIError(409, "ExternalError.RenameFailed", "exists")
+        tree[old_parent].remove(entry)
+        tree[new_parent].append((new_name,) + entry[1:])
+        for key in [k for k in tree if k == oldpath or k.startswith(oldpath + "/")]:
+            tree[newpath + key[len(oldpath) :]] = tree.pop(key)
+        return FakeResponse({"code": "FileRenamed"})
 
     def operation_stat(self, collection, path, **kwargs):
         """Stat one entry of the fake tree, without listing it.
@@ -219,7 +298,7 @@ class FakeTransferClient:
         self.stat_calls.append(path)
         path = path.rstrip("/") or "/"
         parent, name = path.rsplit("/", 1)
-        if path in TREE:  # a directory, whether or not its parent is in TREE
+        if path in self.tree:  # a directory, whether or not its parent is listed
             return FakeResponse(
                 {"name": name, "type": "dir", "size": 0, "permissions": "0755"}
             )

@@ -127,6 +127,42 @@ unlike `ls`, it never lists a directory's contents, however large.
 | `--local-user` | map to this local account (GCSv5 mapped collections) |
 | `--format json` | the raw entry, plus `path` and `collection` |
 
+## `mkdir` — create directories
+
+```sh
+globus-fs mkdir dataden:/umms-mylab/results
+globus-fs mkdir -p dataden:/umms-mylab/results/2026/run1
+```
+
+| option | |
+| --- | --- |
+| `-p, --parents` | create missing parents; no error if it already exists |
+| `-v, --verbose` | print each directory created |
+
+## `mv` — rename or move, within one collection
+
+```sh
+globus-fs mv dataden:/lab/run1.tar dataden:/lab/run1-final.tar   # rename
+globus-fs mv dataden:/lab/a.tar dataden:/lab/b.tar dataden:/lab/archive  # into a directory
+```
+
+A Globus rename: if the last path is an existing directory, the others move
+into it, as with `mv`.
+
+| option | |
+| --- | --- |
+| `-v, --verbose` | print each rename |
+
+- **Never overwrites.** If the target exists, that move is refused; GNU `mv`
+  would replace it silently, which is worse on shared or CUI storage.
+- **One collection only.** Moving between collections is a transfer
+  (`globus transfer`); `mv` refuses it.
+- **One filesystem.** A collection can span several filesystems, and a
+  rename cannot cross between them. That move fails with an explanation;
+  nothing is copied behind your back. Copy, then delete the original.
+- A directory cannot move into itself, and `/` cannot move. One refused or
+  failed source does not stop the others; the exit status is then 1.
+
 ## `find` — search recursively
 
 ```sh
@@ -341,6 +377,7 @@ relative, plus Tab completion, `|` and `>`.
 | | |
 | --- | --- |
 | `ls`, `stat`, `find`, `du`, `archivescan` | as above; the path defaults to the current directory |
+| `mkdir`, `mv` | as above, with relative paths |
 | `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it |
 | `pwd` | prints `name:path`, using your bookmark or a site shortcut, which pastes back into `cd`, `globus-fs` and the like |
 | `pwd -u` | prints `UUID:/path`, for `globus-cli`, the web app, or anyone without your names |
