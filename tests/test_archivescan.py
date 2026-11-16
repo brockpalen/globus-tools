@@ -150,3 +150,27 @@ def test_du_no_longer_follows_directory_symlinks(run, capsys, scan_tree):
     assert "/lab/linked-dir" not in client.ls_calls
     rows = {r["path"]: r for r in json.loads(capsys.readouterr().out)}
     assert "/lab/linked-dir" not in rows
+
+
+@pytest.mark.parametrize("option", ["--maxdepth", "--no-hidden", "--summary"])
+def test_options_that_would_skew_the_split_are_gone(run, scan_tree, option):
+    """The split is only right for the whole tree, dotfiles included."""
+    argv = ["archivescan", f"{COLLECTION}:/lab", option]
+    if option == "--maxdepth":
+        argv.append("1")
+    with pytest.raises(SystemExit) as caught:
+        run(argv)
+    assert caught.value.code == 2  # argparse: unrecognized argument
+
+
+def test_dotfiles_are_counted(run, capsys, scan_tree, monkeypatch):
+    """Hidden files are data that would be archived too."""
+    monkeypatch.setitem(TREE, "/lab/sub", [(".hidden.tar", "file", 2 * GB)])
+    result, _ = scan(run, capsys)
+    assert result["dataden_files"] == 3  # big.tar, just-over.bin, .hidden.tar
+
+
+def test_whole_tree_is_walked(run, capsys, scan_tree):
+    """No depth limit: the subdirectory's files are in the counts."""
+    result, client = scan(run, capsys)
+    assert "/lab/sub" in client.ls_calls
