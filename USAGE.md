@@ -319,10 +319,13 @@ Fraction Offline: 99.66008 %
 | --- | --- |
 | `-s, --size SIZE` | files **larger** than this are Data Den candidates; equal or smaller go to cache. Default `100M` |
 | `-f, --filter GLOB` | only count files whose **full path** matches, e.g. `'*.tar'` |
-| `--maxdepth N` | how deep to walk |
-| `--summary` | directories scanned, to stderr |
 | `-j, --jobs N` | concurrent listings; 8 by default |
-| `--no-hidden`, `--local-user`, `--max-errors` | as for `ls` |
+| `--local-user`, `--max-errors` | as for `ls` |
+
+Always the whole tree, dotfiles included: the split is only right for
+everything that would be archived, so there is no depth limit or dotfile
+skipping. Snapshot directories are skipped, and symbolic links are not
+followed.
 
 **Setting the default size.** `$GLOBUS_FS_ARCHIVESCAN_SIZE` replaces the
 `100M` default, for a site or a module where the migration threshold is

@@ -1064,7 +1064,7 @@ def cmd_archivescan(args):
     start = time.time()
     totals = [0, 0, 0, 0]
     for path, _depth, entries in _walk_or_explain(
-        args, tc, collection, root, maxdepth=args.maxdepth, skip=ARCHIVESCAN_SKIP
+        args, tc, collection, root, skip=ARCHIVESCAN_SKIP
     ):
         for i, n in enumerate(archivescan_tally(entries, path, threshold, args.filter)):
             totals[i] += n
@@ -1103,9 +1103,6 @@ def cmd_archivescan(args):
         )
     else:
         _print_archivescan(row)
-    walker = getattr(args, "_walker", None)
-    if args.summary and walker:
-        print(f"\n{walker.dirs_scanned} director(ies) scanned", file=sys.stderr)
     _report_walk_errors(args)
 
 
@@ -1461,10 +1458,13 @@ def build_parser(in_shell=False):
     sub = p.add_subparsers(dest="cmd")
 
     # ---- filesystem helpers -------------------------------------------
-    def add_walk_opts(sp):
+    def add_walk_opts(sp, partial=True):
         """Add the target and traversal options for filesystem commands.
 
         :param sp: the parser to extend
+        :param partial: also offer --maxdepth, --no-hidden and --summary;
+            False for archivescan, whose answer is only right for the whole
+            tree, dotfiles included
         """
         sp.add_argument(
             "target",
@@ -1479,10 +1479,11 @@ def build_parser(in_shell=False):
             default=8,
             help="concurrent directory listings (default: 8)",
         )
-        sp.add_argument(
-            "--maxdepth", type=int, help="do not descend deeper than N levels"
-        )
-        sp.add_argument("--no-hidden", action="store_true", help="skip dotfiles")
+        if partial:
+            sp.add_argument(
+                "--maxdepth", type=int, help="do not descend deeper than N levels"
+            )
+            sp.add_argument("--no-hidden", action="store_true", help="skip dotfiles")
         sp.add_argument(
             "--local-user",
             help="map to this local account (GCSv5 mapped " "collections only)",
@@ -1493,9 +1494,12 @@ def build_parser(in_shell=False):
             default=10,
             help="unlistable directories to print (default: 10)",
         )
-        sp.add_argument(
-            "--summary", action="store_true", help="print totals to stderr when done"
-        )
+        if partial:
+            sp.add_argument(
+                "--summary",
+                action="store_true",
+                help="print totals to stderr when done",
+            )
 
     # As for du: GNU ls's letters, so -h is human-readable and help is --help.
     lsp = sub.add_parser("ls", help="list a directory on a collection", add_help=False)
@@ -1724,7 +1728,7 @@ def build_parser(in_shell=False):
         "archivescan",
         help="how Data Den friendly a tree is: files over and under a size",
     )
-    add_walk_opts(a)
+    add_walk_opts(a, partial=False)
     a.add_argument(
         "-s",
         "--size",
@@ -1742,7 +1746,8 @@ def build_parser(in_shell=False):
         help="only count files whose full path matches, e.g. '*.tar'",
     )
     add_common(a)
-    a.set_defaults(func=cmd_archivescan)
+    # always the whole tree, dotfiles included
+    a.set_defaults(func=cmd_archivescan, maxdepth=None, no_hidden=False)
 
     col = sub.add_parser(
         "collections",
