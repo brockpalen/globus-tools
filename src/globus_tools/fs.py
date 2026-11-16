@@ -565,30 +565,30 @@ def _ls_emit(args, rows):
         )
 
 
-def cmd_ls_fs(args):
-    """List a directory on a collection.
+def _targets(args):
+    """The path arguments, as a list, for commands that take several.
 
     :param args: parsed arguments
+    :returns: the targets as typed
     """
-    tc = args.tool.transfer_client(args)
-    collection, path = _resolve_target(args, tc)
+    return args.target if isinstance(args.target, list) else [args.target]
 
-    if args.recursive:
-        rows = []
-        for dirpath, _depth, entries in _walk_or_explain(
-            args, tc, collection, path, maxdepth=args.maxdepth
-        ):
-            for e in _ls_sort(list(entries), args):
-                rows.append((e, posixpath.join(dirpath, _ls_name(e, args))))
-        _ls_emit(args, rows)
-        _report_walk_errors(args)
-        return
 
+def _ls_entries(args, tc, collection, path):
+    """List one directory, or stat one file: what ``ls PATH`` shows.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param collection: the collection UUID
+    :param path: the absolute path
+    :returns: ``(is_dir, entries)``
+    :raises SystemExit: with the API's explanation if it cannot be listed
+    """
     kwargs = {"path": path, "show_hidden": not args.no_hidden}
     if args.local_user:
         kwargs["local_user"] = args.local_user
     try:
-        entries = list(args.tool.call(tc.operation_ls, collection, **kwargs))
+        return True, list(args.tool.call(tc.operation_ls, collection, **kwargs))
     except globus_sdk.TransferAPIError as e:
         if "NotDirectory" not in (e.code or ""):
             args.tool.api_error(e)
@@ -597,8 +597,67 @@ def cmd_ls_fs(args):
         entry = _stat_or_none(args, tc, collection, path)
         if entry is None:
             args.tool.api_error(e)
-        entries = [dict(entry, name=path)]
-    _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
+        return False, [dict(entry, name=path)]
+
+
+def cmd_ls_fs(args):
+    """List directories or files on a collection, as ls does.
+
+    With several paths, files come first, then each directory under a
+    ``path:`` heading. A path that cannot be listed is reported and the
+    rest still are; the exit status is then 1.
+
+    :param args: parsed arguments
+    """
+    tc = args.tool.transfer_client(args)
+    targets = _targets(args)
+    if args.recursive:
+        for spec in targets:
+            collection, path = _resolve_target(argparse.Namespace(target=spec), tc)
+            rows = []
+            for dirpath, _depth, entries in _walk_or_explain(
+                args, tc, collection, path, maxdepth=args.maxdepth
+            ):
+                for e in _ls_sort(list(entries), args):
+                    rows.append((e, posixpath.join(dirpath, _ls_name(e, args))))
+            _ls_emit(args, rows)
+        _report_walk_errors(args)
+        return
+
+    files, dirs, failed = [], [], False
+    for spec in targets:
+        try:
+            collection, path = _resolve_target(argparse.Namespace(target=spec), tc)
+            is_dir, entries = _ls_entries(args, tc, collection, path)
+        except SystemExit as e:
+            if len(targets) == 1:
+                raise
+            print(e.code, file=sys.stderr)
+            failed = True
+            continue
+        if is_dir:
+            dirs.append((path, entries))
+        else:
+            files.extend(entries)
+
+    if args.format == "json" and len(targets) > 1:
+        docs = [dict(e, path=e["name"]) for e in files]
+        docs += [
+            dict(e, path=posixpath.join(d, e["name"])) for d, es in dirs for e in es
+        ]
+        json.dump(docs, sys.stdout, indent=2, default=str)
+        print()
+    else:
+        if files:
+            _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(files, args)])
+        for i, (path, entries) in enumerate(dirs):
+            if len(targets) > 1:
+                if files or i:
+                    print()
+                print(f"{safe(path)}:")
+            _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
+    if failed:
+        sys.exit(1)
 
 
 def cmd_stat(args):
@@ -610,16 +669,43 @@ def cmd_stat(args):
     :param args: parsed arguments
     """
     tc = args.tool.transfer_client(args)
-    collection, path = _resolve_target(args, tc)
+    targets = _targets(args)
     kwargs = {"local_user": args.local_user} if args.local_user else {}
-    try:
-        entry = args.tool.call(tc.operation_stat, collection, path, **kwargs).data
-    except globus_sdk.TransferAPIError as e:
-        args.tool.api_error(e)
+    docs, failed = [], False
+    for i, spec in enumerate(targets):
+        try:
+            collection, path = _resolve_target(argparse.Namespace(target=spec), tc)
+            try:
+                entry = args.tool.call(
+                    tc.operation_stat, collection, path, **kwargs
+                ).data
+            except globus_sdk.TransferAPIError as e:
+                args.tool.api_error(e)
+        except SystemExit as e:
+            if len(targets) == 1:
+                raise
+            print(e.code, file=sys.stderr)
+            failed = True
+            continue
+        if args.format == "json":
+            docs.append(dict(entry, path=path, collection=collection))
+            continue
+        if i:
+            print()
+        _print_stat(path, entry)
     if args.format == "json":
-        json.dump(dict(entry, path=path, collection=collection), sys.stdout, indent=2)
+        json.dump(docs[0] if len(targets) == 1 else docs, sys.stdout, indent=2)
         print()
-        return
+    if failed:
+        sys.exit(1)
+
+
+def _print_stat(path, entry):
+    """Print one stat result.
+
+    :param path: the absolute path
+    :param entry: the entry document
+    """
     size = entry.get("size")
     print(f"  Path: {safe(path)}")
     print(f"  Type: {entry.get('type', '?')}")
@@ -950,9 +1036,51 @@ def cmd_du(args):
             file=sys.stderr,
         )
     tc = args.tool.transfer_client(args)
-    collection, root = _resolve_target(args, tc)
-    root = root.rstrip("/") or "/"
+    targets = _targets(args)
+    rows, grand, errors, failed, walker = [], [0, 0, 0], [], False, None
+    for spec in targets:
+        try:
+            root_rows, root_total, walker = _du_one(args, tc, spec)
+        except SystemExit as e:
+            if len(targets) == 1:
+                raise
+            print(e.code, file=sys.stderr)
+            failed = True
+            continue
+        if walker:
+            errors.extend(walker.errors)
+        rows += root_rows
+        if root_total:
+            grand = [a + b for a, b in zip(grand, root_total)]
+    if args.total and rows:  # du -c: the sum over every path given
+        rows.append(("total", grand))
+    if rows:
+        _du_emit(args, rows, fmt_size)
+    if args.summary and walker:
+        print(
+            f"\n{walker.dirs_scanned} director(ies) scanned in "
+            f"{time.time() - walker._t0:.0f}s",
+            file=sys.stderr,
+        )
+    if walker:
+        walker.errors = errors  # every path's, for the report below
+        args._walker = walker
+    _report_walk_errors(args)
+    if failed:
+        sys.exit(1)
 
+
+def _du_one(args, tc, spec):
+    """Walk one path and total it, as du does for each argument.
+
+    :param args: parsed arguments
+    :param tc: an authenticated Transfer client
+    :param spec: the path as given
+    :returns: ``(rows, root_total, walker)``; rows sorted for display
+    """
+    collection, root = _resolve_target(argparse.Namespace(target=spec), tc)
+    root = root.rstrip("/") or "/"
+    args._walker = None
     own = {}  # path -> [bytes, files, dirs]
     for path, _depth, entries in _walk_or_explain(
         args, tc, collection, root, maxdepth=args.maxdepth
@@ -961,12 +1089,10 @@ def cmd_du(args):
         files = sum(1 for e in entries if e.get("type") != "dir")
         dirs = sum(1 for e in entries if e.get("type") == "dir")
         own[path] = [size, files, dirs]
-
+    walker = getattr(args, "_walker", None)
     if not own:
-        print("nothing listed", file=sys.stderr)
-        _report_walk_errors(args)
-        return
-
+        print(f"nothing listed under {escape_text(root)}", file=sys.stderr)
+        return [], None, walker
     totals = _du_rollup(own, root)
     rows = [
         (p, t)
@@ -979,18 +1105,7 @@ def cmd_du(args):
         "path": lambda r: r[0],
     }[args.sort]
     rows.sort(key=sort_key)
-    if args.total:  # one path, so the grand total is the root's, as du -c
-        rows.append(("total", totals[root]))
-    _du_emit(args, rows, fmt_size)
-
-    walker = getattr(args, "_walker", None)
-    if args.summary and walker:
-        print(
-            f"\n{walker.dirs_scanned} director(ies) scanned in "
-            f"{time.time() - walker._t0:.0f}s",
-            file=sys.stderr,
-        )
-    _report_walk_errors(args)
+    return rows, totals[root], walker
 
 
 #: Environment variable overriding the archivescan size threshold.
@@ -1405,7 +1520,8 @@ a Globus API call, and the prompt names the collection you are on.
 
 paths
   relative, .., -, /absolute, or name:/path or UUID:/path for another
-  collection. Tab completes names.
+  collection. Tab completes names. * ? [abc] {a,b} expand as in bash
+  (quote to keep them literal); a pattern matching nothing is an error.
 
 commands
   ls stat find du archivescan    as globus-fs, paths relative to here
@@ -1450,6 +1566,7 @@ def build_parser(in_shell=False):
     :returns: the configured top-level parser
     """
     target_nargs = "?" if in_shell else None
+    several_nargs = "*" if in_shell else "+"
     p = new_parser(
         "globus-fs",
         "ls, find and du for Globus collections, plus your own transfers.",
@@ -1458,17 +1575,18 @@ def build_parser(in_shell=False):
     sub = p.add_subparsers(dest="cmd")
 
     # ---- filesystem helpers -------------------------------------------
-    def add_walk_opts(sp, partial=True):
+    def add_walk_opts(sp, partial=True, several=False):
         """Add the target and traversal options for filesystem commands.
 
         :param sp: the parser to extend
         :param partial: also offer --maxdepth, --no-hidden and --summary;
             False for archivescan, whose answer is only right for the whole
             tree, dotfiles included
+        :param several: take any number of paths, as du does
         """
         sp.add_argument(
             "target",
-            nargs=target_nargs,
+            nargs=several_nargs if several else target_nargs,
             help="COLLECTION_UUID:/path, or a bookmark name "
             "(see the 'bookmark' command)",
         )
@@ -1505,7 +1623,9 @@ def build_parser(in_shell=False):
     lsp = sub.add_parser("ls", help="list a directory on a collection", add_help=False)
     lsp.add_argument("--help", action="help", help="show this help and exit")
     lsp.add_argument(
-        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+        "target",
+        nargs=several_nargs,
+        help="COLLECTION_UUID:/path, or a bookmark name; several allowed",
     )
     lsp.add_argument(
         "-l", "--long", action="store_true", help="mode, owner, size and mtime"
@@ -1572,7 +1692,9 @@ def build_parser(in_shell=False):
         "stat", help="type, size, owner, mode and mtime of one file or directory"
     )
     st.add_argument(
-        "target", nargs=target_nargs, help="COLLECTION_UUID:/path, or a bookmark name"
+        "target",
+        nargs=several_nargs,
+        help="COLLECTION_UUID:/path, or a bookmark name; several allowed",
     )
     st.add_argument(
         "--local-user", help="map to this local account (GCSv5 mapped collections)"
@@ -1643,7 +1765,7 @@ def build_parser(in_shell=False):
     # so help is --help only.
     d = sub.add_parser("du", help="sizes and file counts per directory", add_help=False)
     d.add_argument("--help", action="help", help="show this help and exit")
-    add_walk_opts(d)
+    add_walk_opts(d, several=True)
     d.add_argument(
         "-d",
         "--depth",

@@ -57,6 +57,13 @@ Accepted by most commands.
 | `--format table\|tsv\|csv\|json` | output format; `table` by default |
 | `--no-header` | omit the header row |
 
+## Patterns on the command line
+
+Outside `globus-fs shell`, your own shell sees the arguments first: an
+unquoted `globus-fs ls dataden:/lab/*.tar` is matched against **local**
+files, not the collection. Quote patterns there, or use
+`find --name '*.tar'`, or `globus-fs shell`, which expands them remotely.
+
 ## Exit status
 
 0 on success, 1 on an error. A walk (`find`, `du`, `archivescan`, `ls -R`)
@@ -107,7 +114,9 @@ globus-fs ls -lR dataden:/lab          # recursive
 | `--max-errors N` | unlistable directories to report; 10 by default |
 
 Behaves like `ls`: multi-column on a terminal, one name per line when
-piped, and sizes in bytes unless `-h`. Help is `--help`, since `-h` is
+piped, and sizes in bytes unless `-h`. Several paths are listed in turn,
+files first and then each directory under a `path:` heading; a file is
+shown on its own, as `ls FILE` does. Help is `--help`, since `-h` is
 human-readable.
 Dotfiles are shown by default, which is the Globus API's behaviour.
 
@@ -120,7 +129,8 @@ globus-fs stat dataden:/umms-mylab/backups/run1.tar
 ```
 
 Type, size, mode, owner, group and modification time, from one API call:
-unlike `ls`, it never lists a directory's contents, however large.
+unlike `ls`, it never lists a directory's contents, however large. Takes
+several paths.
 
 | option | |
 | --- | --- |
@@ -250,7 +260,7 @@ globus-fs du -b dataden:/lab --format tsv      # exact bytes
   3.9G      5     1  /data/project-a
 ```
 
-Options follow GNU `du`. Without a unit option, sizes are in 1024-byte
+Options follow GNU `du`, including several paths at once, which `-c` totals. Without a unit option, sizes are in 1024-byte
 units rounded up, as `du` prints them; `-h` is human-readable, so help is
 `--help`.
 
@@ -391,6 +401,21 @@ relative, plus Tab completion, `|` and `>`.
 | `help [COMMAND]`, `exit` (or Ctrl-D) | |
 
 `find` also accepts `-name`, `-iname`, `-type` and `-maxdepth`, as people type them.
+
+**Globs work as in bash**, expanded against the collection:
+
+```
+ls *.tar                    mv run-*.tar archive/
+ls project-?/*.bin          du -sh -c lab-[ab]*
+ls {raw,clean}/*.csv        cd results/2026*        (one match only)
+```
+
+`*`, `?`, `[abc]`, `[!abc]` and `{a,b}` work in the paths given to `ls`,
+`stat`, `du`, `archivescan`, `mv` and `cd`; `*` skips dotfiles unless the
+pattern starts with `.`. Quote or backslash a wildcard to keep it literal
+(`ls '*.txt'`). A pattern that matches nothing is an error rather than
+passed on, as with bash's `failglob`. `find`'s arguments are not expanded,
+so `find --name *.gz` works unquoted.
 
 **`|` sends output to read-only local filters only:** `wc`, `grep`, `egrep`,
 `fgrep`, `sort`, `uniq`, `head`, `tail`, `cut`, `tr`, `column`, `nl`, `less`.
