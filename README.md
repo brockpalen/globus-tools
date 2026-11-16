@@ -122,6 +122,18 @@ append_path("GLOBUS_FS_SHORTCUTS", "dataden=ab65757f-00f5-4e5b-aa21-133187732a01
 append_path("GLOBUS_FS_SHORTCUTS", "scratch=1a2b3c4d-0000-0000-0000-000000000000:/scratch", ";")
 ```
 
+**For a lab or group**, put the names in a module of the group's own (for
+example under `module use /nfs/turbo/lab/modules`) that sets
+`GLOBUS_FS_SHORTCUTS`, or points `GLOBUS_FS_COLLECTIONS` at a file the group
+manages; no administrator is needed.
+
+A shortcut decides which collection a name reaches, so the files are
+checked: your own must be yours, and write access for others is removed
+with a warning (as for the token file). A group file may be group-writable,
+since whoever can edit the group's module already controls its users'
+`PATH`, but a file anyone can write, or one in a directory anyone can write,
+is ignored with a warning.
+
 `#` starts a comment; `NAME: UUID` and `NAME UUID` also work; a malformed
 line is skipped. Names have no spaces or colons. A personal Globus bookmark
 of the same name wins. Start from
