@@ -41,6 +41,9 @@ FILTERS = frozenset(
 #: Commands whose path argument is resolved against the current directory.
 PATH_COMMANDS = frozenset(("ls", "stat", "find", "du", "archivescan"))
 
+#: Commands taking several paths, each resolved; they change the collection.
+WRITE_COMMANDS = frozenset(("mkdir", "mv"))
+
 #: find's familiar single-dash spellings, mapped to globus-fs options.
 FIND_ALIASES = {
     "-name": "--name",
@@ -521,8 +524,31 @@ class GlobusShell(cmd.Cmd):
         if name in PATH_COMMANDS:
             collection, path, _ = self.resolve(args.target)
             args.target = f"{collection}:{path}"
-        self.tool.dispatch(args)
+        if name not in WRITE_COMMANDS:
+            self.tool.dispatch(args)
+            return False
+        args.paths = ["%s:%s" % self.resolve(p)[:2] for p in args.paths]
+        try:
+            self.tool.dispatch(args)
+        finally:
+            self._cache.clear()  # listings for Tab completion are stale now
+            if name == "mv":
+                self._check_cwd()
         return False
+
+    def _check_cwd(self):
+        """After an mv, say so if the current directory is no longer there."""
+        collection, path, _ = self.here
+        if path == "/":
+            return
+        try:
+            self.tool.call(self.tc.operation_stat, collection, path)
+        except globus_sdk.GlobusAPIError:
+            print(
+                f"globus-fs shell: {escape_text(path)} was moved; cd to its new "
+                "location",
+                file=sys.stderr,
+            )
 
     def _local(self, command):
         """Run ``!command`` with the user's own shell, explicitly local.
