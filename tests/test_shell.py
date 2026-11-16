@@ -527,3 +527,15 @@ def test_names_that_would_not_paste_back_are_skipped(sh, monkeypatch, capsys):
     sh.onecmd(f"cd {COLLECTION}:/data")
     sh.onecmd("pwd")
     assert capsys.readouterr().out == f"{COLLECTION}:/data\n"
+
+
+def test_incomplete_walk_sets_the_shell_status(sh, monkeypatch, capsys):
+    """In a script, an unlistable directory makes the last status 1."""
+    from conftest import FakeTransferClient
+
+    partial = FakeTransferClient(unlistable=["/data/project-a/sub1"])
+    monkeypatch.setattr(common.Tool, "transfer_client", lambda self, args: partial)
+    sh.onecmd("cd projects:")
+    sh.onecmd("du -s")
+    assert sh.status == 1
+    assert "/data" in capsys.readouterr().out

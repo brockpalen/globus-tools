@@ -28,7 +28,16 @@ import humanfriendly
 from . import shortcuts as globus_collections
 from . import tasks
 from . import walk as globus_fs
-from .common import Tool, add_common, human_bytes, is_uuid, new_parser, parse_time
+from .common import (
+    Tool,
+    add_common,
+    escape_text,
+    human_bytes,
+    is_uuid,
+    new_parser,
+    parse_time,
+    safe,
+)
 
 TOOL = Tool("globus-fs")
 
@@ -205,7 +214,7 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
     if not produced and walker.errors:
         first = walker.errors[0]
         if first.needs_login or first.code == "PermissionDenied":
-            sys.stderr.write(str(first) + "\n")
+            sys.stderr.write(escape_text(first) + "\n")
             if first.needs_login:
                 # on a terminal the login happens in place, so this only
                 # happens without one
@@ -219,9 +228,14 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
 
 
 def _report_walk_errors(args):
-    """Print the directories a walk could not list.
+    """Print the directories a walk could not list, then exit 1 if any.
+
+    Called last, after the command's output, so everything that could be
+    listed is still printed; the status tells a script it is incomplete,
+    as du and find do.
 
     :param args: parsed arguments, carrying the walker that ran
+    :raises SystemExit: with status 1 if any directory could not be listed
     """
     walker = getattr(args, "_walker", None)
     if not walker or not walker.errors:
@@ -231,9 +245,10 @@ def _report_walk_errors(args):
         f"\n{len(walker.errors)} director(y/ies) could not be listed:", file=sys.stderr
     )
     for err in shown:
-        print(f"  {err}", file=sys.stderr)
+        print(f"  {escape_text(err)}", file=sys.stderr)
     if len(walker.errors) > len(shown):
         print(f"  ... and {len(walker.errors) - len(shown)} more", file=sys.stderr)
+    sys.exit(1)
 
 
 def _entry_matches(args, entry, name, is_dir, min_size, max_size, newer, older):
@@ -340,15 +355,18 @@ def _write_match(args, full, entry, is_dir, end):
             )
             return False
         sys.stdout.write(line + "\n")
-    elif args.long:
+        return True
+    # -0 is for xargs -0, which needs the exact name
+    shown = full if end == "\0" else safe(full)
+    if args.long:
         mtime = (entry.get("last_modified") or "")[:19]
         kind = "d" if is_dir else "-"
         sys.stdout.write(
             f"{kind} {human_bytes(entry.get('size') or 0):>9}  {mtime:19}  "
-            f"{full}{end}"
+            f"{shown}{end}"
         )
     else:
-        sys.stdout.write(full + end)
+        sys.stdout.write(shown + end)
     return True
 
 
@@ -497,17 +515,17 @@ def _ls_emit(args, rows):
             writer.writerow(
                 [
                     _mode_string(e),
-                    e.get("user") or "",
-                    e.get("group") or "",
+                    safe(e.get("user") or ""),
+                    safe(e.get("group") or ""),
                     fmt_size(e.get("size") or 0),
                     (e.get("last_modified") or "")[:19],
-                    shown,
+                    safe(shown),
                 ]
             )
         return
 
     if not args.long:
-        names = [shown for _, shown in rows]
+        names = [safe(shown) for _, shown in rows]
         if sys.stdout.isatty() and not args.one:
             width = args.width or shutil.get_terminal_size((80, 24)).columns
             _print_columns(names, width)
@@ -520,8 +538,8 @@ def _ls_emit(args, rows):
     widths = [0, 0, 0]
     prepared = []
     for e, shown in rows:
-        user = str(e.get("user") or "-")
-        group = str(e.get("group") or "-")
+        user = safe(e.get("user") or "-")
+        group = safe(e.get("group") or "-")
         size = fmt_size(e.get("size") or 0)
         widths = [
             max(widths[0], len(user)),
@@ -535,8 +553,8 @@ def _ls_emit(args, rows):
                 group,
                 size,
                 (e.get("last_modified") or "")[:19],
-                shown,
-                e.get("link_target"),
+                safe(shown),
+                safe(e["link_target"]) if e.get("link_target") else None,
             )
         )
     for mode, user, group, size, mtime, shown, link in prepared:
@@ -596,14 +614,17 @@ def cmd_stat(args):
         print()
         return
     size = entry.get("size")
-    print(f"  Path: {path}")
+    print(f"  Path: {safe(path)}")
     print(f"  Type: {entry.get('type', '?')}")
     if entry.get("link_target"):
-        print(f"  Link: -> {entry['link_target']}")
+        print(f"  Link: -> {safe(entry['link_target'])}")
     if size is not None:
         print(f"  Size: {size} ({human_bytes(size)})")
     print(f"  Mode: {_mode_string(entry)}  ({entry.get('permissions') or '?'})")
-    print(f" Owner: {entry.get('user') or '?'}  Group: {entry.get('group') or '?'}")
+    print(
+        f" Owner: {safe(entry.get('user') or '?')}  "
+        f"Group: {safe(entry.get('group') or '?')}"
+    )
     print(f"Modify: {entry.get('last_modified') or '?'}")
 
 
@@ -717,7 +738,7 @@ def _du_emit(args, rows, fmt_size):
         if not args.no_header:
             writer.writerow(["SIZE", "FILES", "DIRS", "PATH"])
         for p, t in rows:
-            writer.writerow([fmt_size(t[0]), t[1], t[2], p])
+            writer.writerow([fmt_size(t[0]), t[1], t[2], safe(p)])
         return
     width = max([len(fmt_size(t[0])) for _, t in rows] + [4])
     fwidth = max([len(str(t[1])) for _, t in rows] + [5])
@@ -730,7 +751,7 @@ def _du_emit(args, rows, fmt_size):
     for p, t in rows:
         print(
             f"{fmt_size(t[0]).rjust(width)}  {str(t[1]).rjust(fwidth)}  "
-            f"{str(t[2]).rjust(dwidth)}  {p}"
+            f"{str(t[2]).rjust(dwidth)}  {safe(p)}"
         )
 
 
@@ -897,7 +918,12 @@ def cmd_archivescan(args):
         )
         if not args.no_header:
             writer.writerow([k.upper() for k in row])
-        writer.writerow(["" if v is None else v for v in row.values()])
+        writer.writerow(
+            [
+                "" if v is None else safe(v) if isinstance(v, str) else v
+                for v in row.values()
+            ]
+        )
     else:
         _print_archivescan(row)
     walker = getattr(args, "_walker", None)
@@ -1003,10 +1029,10 @@ def cmd_collections(args):
 
     rows = [
         (
-            s.name,
+            safe(s.name),
             s.collection,
-            s.path,
-            s.source,
+            safe(s.path),
+            safe(s.source),
             "shadowed by your bookmark" if s.name in shadowed else "",
         )
         for s in sorted(shortcuts.values(), key=lambda s: s.name)
@@ -1038,10 +1064,10 @@ def cmd_bookmark_list(args):
         return
     rows = [
         (
-            b.get("name", ""),
+            safe(b.get("name", "")),
             b.get("endpoint_id", ""),
             b.get("id", ""),
-            b.get("path", ""),
+            safe(b.get("path", "")),
         )
         for b in sorted(bookmarks, key=lambda b: b.get("name") or "")
     ]
@@ -1075,10 +1101,10 @@ def cmd_bookmark_show(args):
             ("Endpoint ID", "endpoint_id"),
             ("Path", "path"),
         ):
-            print(f"{label.ljust(width)}: {bm.get(key, '')}")
+            print(f"{label.ljust(width)}: {safe(bm.get(key, ''))}")
         return
     # default is the substitution-friendly form, same as globus-cli
-    print(f"{bm.get('endpoint_id', '')}:{bm.get('path', '')}")
+    print(f"{bm.get('endpoint_id', '')}:{safe(bm.get('path', ''))}")
 
 
 def cmd_bookmark_create(args):

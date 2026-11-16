@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import globus_sdk
 
-from .common import add_common, age_seconds, human_bytes, human_dur
+from .common import add_common, age_seconds, human_bytes, human_dur, safe
 
 MISSING_FILTER = globus_sdk.MISSING
 
@@ -80,11 +80,22 @@ class Field:
         """
         self.name = name
         self.header = header
-        self.get = get
+        # labels, owners and collection names are chosen by other people;
+        # escaped on a terminal, exact through a pipe
+        self.get = lambda t, c: _shown(get(t, c))
         self.align = align
         self.flex = flex
         self.minw = minw
         self.sort = sort or (lambda t, c: get(t, c))
+
+
+def _shown(value):
+    """Escape a text cell for the terminal; leave numbers alone.
+
+    :param value: a cell value
+    :returns: the value, with control characters escaped if it is text
+    """
+    return safe(value) if isinstance(value, str) else value
 
 
 def _files(t, c):
@@ -719,17 +730,16 @@ def cmd_task(args):
                 args.tool.api_error(e)
         else:
             args.tool.api_error(e)
+    data = task.data  # a single-document response, not a mapping
     if args.format == "json":
-        json.dump(dict(task), sys.stdout, indent=2, default=str)
+        json.dump(data, sys.stdout, indent=2, default=str)
         print()
     else:
-        data = dict(task)
         width = max(len(k) for k in data)
         for k in sorted(data):
             v = data[k]
-            print(
-                f"{k.ljust(width)}  {json.dumps(v) if isinstance(v, (dict, list)) else v}"
-            )
+            shown = json.dumps(v) if isinstance(v, (dict, list)) else safe(v)
+            print(f"{k.ljust(width)}  {shown}")
     if args.events:
         print("\n--- events ---")
         try:
@@ -748,11 +758,12 @@ def cmd_task(args):
         for ev in events:
             flag = "ERROR" if ev.get("is_error") else "ok   "
             print(
-                f"{(ev.get('time') or '')[:19]}  {flag}  {ev.get('code')}  "
-                f"{(ev.get('description') or '').strip()}"
+                f"{(ev.get('time') or '')[:19]}  {flag}  {safe(ev.get('code'))}  "
+                f"{safe((ev.get('description') or '').strip())}"
             )
             if args.verbose and ev.get("details"):
-                print("    " + str(ev["details"]).replace("\n", "\n    ").strip())
+                lines = str(ev["details"]).strip().splitlines()
+                print("\n".join("    " + safe(line) for line in lines))
 
 
 def add_list_opts(p, admin):

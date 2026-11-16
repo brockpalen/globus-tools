@@ -25,7 +25,7 @@ import sys
 import globus_sdk
 
 from . import tasks
-from .common import Tool, add_common, new_parser
+from .common import Tool, add_common, new_parser, safe
 
 FORBIDDEN_HINT = """
 
@@ -84,8 +84,8 @@ def cmd_endpoints(args):
     rows = [
         (
             e.get("id", "-"),
-            e.get("display_name") or e.get("canonical_name") or "-",
-            e.get("owner_string") or "-",
+            safe(e.get("display_name") or e.get("canonical_name") or "-"),
+            safe(e.get("owner_string") or "-"),
             "yes" if e.get("is_paused") else "no",
         )
         for e in eps

@@ -29,7 +29,7 @@ import time
 import globus_sdk
 
 from . import fs
-from .common import is_uuid
+from .common import escape_text, is_uuid, safe, terminal_output
 
 #: What output may be piped into. Each only reads its input, once the
 #: checks in :func:`check_filter` rule out the options that write files or
@@ -217,7 +217,8 @@ class GlobusShell(cmd.Cmd):
             self.prompt = "(no collection)> "
         else:
             collection, path, entered = self.here
-            self.prompt = f"[{self.label(collection, path, entered)}] {path}> "
+            label = self.label(collection, path, entered)
+            self.prompt = f"[{escape_text(label)}] {escape_text(path)}> "
 
     def resolve(self, text):
         """Turn what was typed into a collection, a path and how it was named.
@@ -411,16 +412,29 @@ class GlobusShell(cmd.Cmd):
             words, filters, redirect = split_line(line)
             for f in filters:
                 check_filter(f)
+            # where the output really lands decides whether names are
+            # escaped: a file gets them exact, the terminal never raw, even
+            # through `| head`
+            reaches_terminal = None
+            if redirect:
+                reaches_terminal = False
+            elif filters:
+                reaches_terminal = sys.stdout.isatty()
+            intent = (
+                contextlib.nullcontext()
+                if reaches_terminal is None
+                else terminal_output(reaches_terminal)
+            )
             with self._output(filters, redirect) as out:
-                with contextlib.redirect_stdout(out):
+                with contextlib.redirect_stdout(out), intent:
                     leave = self._run(words)
             self.status = 0
             return leave
         except ShellError as e:
-            print(f"globus-fs shell: {e}", file=sys.stderr)
+            print(f"globus-fs shell: {escape_text(e)}", file=sys.stderr)
         except SystemExit as e:
             if isinstance(e.code, str):
-                print(e.code, file=sys.stderr)
+                print(escape_text(e.code), file=sys.stderr)
             elif not e.code:
                 self.status = 0
         except KeyboardInterrupt:
@@ -430,7 +444,7 @@ class GlobusShell(cmd.Cmd):
         except Exception as e:  # a bug must not throw away the session
             print(
                 f"globus-fs shell: internal error, please report: "
-                f"{type(e).__name__}: {e}",
+                f"{type(e).__name__}: {escape_text(e)}",
                 file=sys.stderr,
             )
         return False
@@ -568,13 +582,13 @@ class GlobusShell(cmd.Cmd):
         uuid_form = f"{collection}:{path}"
         named = self.name_for(collection, path, entered)
         if not words:
-            print(named[1] if named else uuid_form)
+            print(safe(named[1] if named else uuid_form))
         elif words[0] == "-u":
-            print(uuid_form)
+            print(safe(uuid_form))
         else:
-            print(f"      name: {named[1] if named else '-'}")
-            print(f"collection: {self.display_name(collection) or '-'}")
-            print(f"      uuid: {uuid_form}")
+            print(f"      name: {safe(named[1]) if named else '-'}")
+            print(f"collection: {safe(self.display_name(collection) or '-')}")
+            print(f"      uuid: {safe(uuid_form)}")
 
     def builtin_lcd(self, words):
         """lcd [DIR]: change the local directory > and >> write in.
@@ -634,6 +648,8 @@ class GlobusShell(cmd.Cmd):
             for e in self._listing(collection, path):
                 name = e.get("name", "")
                 is_dir = e.get("type") == "dir"
+                if escape_text(name) != name:
+                    continue  # would put control characters on the line
                 if name.startswith(partial) and (is_dir or not dirs_only):
                     out.append(prefix + name + ("/" if is_dir else ""))
             return out
