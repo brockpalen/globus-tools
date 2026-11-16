@@ -12,13 +12,13 @@ Build from a release tag, so the tree matches a known version:
 
 ```sh
 git clone https://github.com/brockpalen/globus-tools && cd globus-tools
-git checkout v0.3.0
-packaging/build-standalone.sh /sw/pkgs/globus-tools/0.3.0
-packaging/verify-standalone.sh /sw/pkgs/globus-tools/0.3.0
+git checkout v0.4.0
+packaging/build-standalone.sh /sw/pkgs/globus-tools/0.4.0
+packaging/verify-standalone.sh /sw/pkgs/globus-tools/0.4.0
 ```
 
 ```
-/sw/pkgs/globus-tools/0.3.0/
+/sw/pkgs/globus-tools/0.4.0/
 ├── bin/globus-fs        put this directory on PATH
 ├── bin/globus-console
 ├── python/              private Python and dependencies
@@ -52,7 +52,7 @@ build on Rocky 8, Rocky 10 and openSUSE Leap 15.6, and on Ubuntu 24.04.
 | `PYTHON_VERSION` | `3.12` | bundled interpreter |
 
 ```sh
-GLIBC=2.34 packaging/build-standalone.sh /sw/pkgs/globus-tools/0.3.0
+GLIBC=2.34 packaging/build-standalone.sh /sw/pkgs/globus-tools/0.4.0
 ```
 
 Set `GLIBC` to your oldest target system, not the build host: compiled
