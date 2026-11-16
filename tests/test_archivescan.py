@@ -174,3 +174,159 @@ def test_whole_tree_is_walked(run, capsys, scan_tree):
     """No depth limit: the subdirectory's files are in the counts."""
     result, client = scan(run, capsys)
     assert "/lab/sub" in client.ls_calls
+
+
+# ---- archivetar #76: totals and the -d per-directory report ---------------
+def test_totals_are_in_every_row(run, capsys, scan_tree):
+    """total_files and total_bytes, as archivetar's archivescan reports."""
+    result, _ = scan(run, capsys)
+    assert result["total_files"] == result["dataden_files"] + result["cache_files"]
+    assert result["total_bytes"] == result["dataden_bytes"] + result["cache_bytes"]
+
+
+def test_keys_match_archivetar(run, capsys, scan_tree):
+    """Same keys, same order, so output from both tools combines."""
+    result, _ = scan(run, capsys)
+    assert list(result) == [
+        "path",
+        "threshold_bytes",
+        "dataden_files",
+        "dataden_bytes",
+        "cache_files",
+        "cache_bytes",
+        "total_files",
+        "total_bytes",
+        "fraction_offline",
+        "seconds",
+    ]
+
+
+def test_report_has_a_total_section(run, capsys, scan_tree):
+    """The table gains Total: files and size."""
+    run(["archivescan", f"{COLLECTION}:/lab"])
+    out = capsys.readouterr().out
+    assert "Total:\nFiles: 5\n" in out  # 4 at the top, 1 in sub
+
+
+@pytest.fixture
+def deep_tree(monkeypatch, scan_tree):
+    """Add /lab/sub/deeper, two levels below the root.
+
+    :param monkeypatch: pytest's monkeypatch fixture
+    :param scan_tree: the base scan tree
+    :returns: nothing
+    """
+    monkeypatch.setitem(
+        TREE, "/lab/sub", [("a.fastq", "file", 50 * MB), ("deeper", "dir", 0)]
+    )
+    monkeypatch.setitem(TREE, "/lab/sub/deeper", [("huge.bin", "file", 3 * GB)])
+
+
+def depth_rows(run, capsys, *extra):
+    """Run archivescan -d as JSON and index the rows by path.
+
+    :param run: the globus-fs runner fixture
+    :param capsys: pytest's output capture
+    :param extra: more arguments, e.g. ``"-d", "1"``
+    :returns: the rows in order
+    """
+    run(["archivescan", f"{COLLECTION}:/lab", "--format", "json", *extra])
+    return json.loads(capsys.readouterr().out)
+
+
+def test_depth_rows_roll_up_like_du(run, capsys, deep_tree):
+    """Each row counts everything below it; the whole tree is last."""
+    rows = depth_rows(run, capsys, "-d", "1")
+    paths = [r["path"] for r in rows]
+    assert paths[-1] == "/lab"
+    by_path = {r["path"]: r for r in rows}
+    assert by_path["/lab/sub"]["total_bytes"] == 50 * MB + 3 * GB
+    assert "/lab/sub/deeper" not in by_path  # below -d 1
+    assert by_path["/lab"]["total_files"] == 6
+
+
+def test_depth_two_nests(run, capsys, deep_tree):
+    """-d 2 adds the next level, and parents still count it."""
+    by_path = {r["path"]: r for r in depth_rows(run, capsys, "-d", "2")}
+    assert by_path["/lab/sub/deeper"]["dataden_files"] == 1
+    assert by_path["/lab/sub"]["dataden_files"] == 1
+
+
+def test_depth_zero_matches_the_summary(run, capsys, deep_tree):
+    """-d 0 is one row: the same numbers as the plain report."""
+    rows = depth_rows(run, capsys, "-d", "0")
+    summary, _ = scan(run, capsys)
+    assert len(rows) == 1
+    assert {k: v for k, v in rows[0].items() if k != "seconds"} == {
+        k: v for k, v in summary.items() if k != "seconds"
+    }
+
+
+def test_depth_json_is_a_list(run, capsys, scan_tree):
+    """json with -d is a list, even of one."""
+    assert isinstance(depth_rows(run, capsys, "-d", "0"), list)
+
+
+@pytest.mark.parametrize("fmt", ["tsv", "csv"])
+def test_depth_machine_formats_are_exact_bytes(run, capsys, deep_tree, fmt):
+    """No units in machine formats: sizes are plain integers to sum and sort."""
+    run(["archivescan", f"{COLLECTION}:/lab", "-d", "1", "--format", fmt])
+    lines = capsys.readouterr().out.strip().splitlines()
+    sep = "\t" if fmt == "tsv" else ","
+    header = lines[0].split(sep)
+    col = header.index("TOTAL_BYTES")
+    for line in lines[1:]:
+        assert line.split(sep)[col].isdigit()
+
+
+@pytest.mark.parametrize("key", ["size", "files", "cache", "offline", "name"])
+def test_depth_sort_orders_and_total_last(run, capsys, deep_tree, key):
+    """Every --sort keeps the whole-tree row last."""
+    rows = depth_rows(run, capsys, "-d", "1", "--sort", key)
+    assert rows[-1]["path"] == "/lab"
+
+
+def test_depth_sort_size_is_largest_first(run, capsys, deep_tree):
+    """The default: biggest directory first."""
+    rows = depth_rows(run, capsys, "-d", "1")[:-1]
+    sizes = [r["total_bytes"] for r in rows]
+    assert sizes == sorted(sizes, reverse=True)
+
+
+def test_sort_offline_puts_empty_directories_last(run, capsys, scan_tree, monkeypatch):
+    """A directory with no files has no fraction; it sorts after the rest."""
+    monkeypatch.setitem(TREE, "/lab", TREE["/lab"] + [("empty", "dir", 0)])
+    monkeypatch.setitem(TREE, "/lab/empty", [])
+    rows = depth_rows(run, capsys, "-d", "1", "--sort", "offline")
+    assert rows[-2]["path"] == "/lab/empty" and rows[-2]["fraction_offline"] is None
+
+
+def test_depth_table_is_aligned_with_du_sizes(run, capsys, deep_tree):
+    """Right-aligned numbers, du -h sizes, relative paths last, . at the end."""
+    run(["archivescan", f"{COLLECTION}:/lab", "-d", "1"])
+    lines = capsys.readouterr().out.rstrip("\n").splitlines()
+    assert lines[0].split() == [
+        "DATADEN_FILES",
+        "DATADEN_SIZE",
+        "CACHE_FILES",
+        "CACHE_SIZE",
+        "TOTAL_FILES",
+        "TOTAL_SIZE",
+        "OFFLINE%",
+        "PATH",
+    ]
+    assert lines[-1].split()[-1] == "."
+    assert any(line.split()[-1] == "./sub" for line in lines)
+    assert len({len(line.rsplit("  ", 1)[0]) for line in lines}) == 1  # aligned
+    sub = next(line for line in lines if line.endswith("./sub")).split()
+    assert sub[5] == fs.human_size(50 * MB + 3 * GB)
+
+
+def test_gpfs_snapshots_are_skipped_too(run, capsys, scan_tree, monkeypatch):
+    """GPFS calls it .snapshots; archivetar skips both, and so do we."""
+    monkeypatch.setitem(TREE, "/lab", TREE["/lab"] + [(".snapshots", "dir", 0)])
+    monkeypatch.setitem(TREE, "/lab/.snapshots", [("copy.tar", "file", 9 * GB)])
+    result, client = scan(run, capsys)
+    assert "/lab/.snapshots" not in client.ls_calls
+    rows = depth_rows(run, capsys, "-d", "1")
+    assert "/lab/.snapshots" not in {r["path"] for r in rows}

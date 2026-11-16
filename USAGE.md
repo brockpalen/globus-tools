@@ -306,6 +306,7 @@ archivetar's `archivescan`, for storage reached only through Globus.
 globus-fs archivescan dataden:/umms-mylab
 globus-fs archivescan turbo:/mylab --size 1G
 globus-fs archivescan turbo:/mylab --filter '*.tar'
+globus-fs archivescan turbo:/mylab -d 1          # one row per directory
 GLOBUS_FS_ARCHIVESCAN_SIZE=10M globus-fs archivescan locker:/mylab
 ```
 
@@ -321,6 +322,10 @@ Cache (Locker) Candidates:
 Files: 11029
 Size: 1.3 TiB
 
+Total:
+Files: 14664
+Size: 396 TiB
+
 Total Time 2.74 Seconds
 Fraction Offline: 99.66008 %
 ```
@@ -329,12 +334,14 @@ Fraction Offline: 99.66008 %
 | --- | --- |
 | `-s, --size SIZE` | files **larger** than this are Data Den candidates; equal or smaller go to cache. Default `100M` |
 | `-f, --filter GLOB` | only count files whose **full path** matches, e.g. `'*.tar'` |
+| `-d, --max-depth N` | one row per directory down to depth N, like `du -d`; each counts everything below it, and the last row (`.`) is the whole tree |
+| `--sort size\|files\|cache\|offline\|name` | order of the `-d` rows (each largest first, or by name); `.` stays last. Default `size` |
 | `-j, --jobs N` | concurrent listings; 8 by default |
 | `--local-user`, `--max-errors` | as for `ls` |
 
 Always the whole tree, dotfiles included: the split is only right for
-everything that would be archived, so there is no depth limit or dotfile
-skipping. Snapshot directories are skipped, and symbolic links are not
+everything that would be archived, so there is no walk limit or dotfile
+skipping (`-d` only limits which directories get their own row). Snapshot directories are skipped, and symbolic links are not
 followed.
 
 **Setting the default size.** `$GLOBUS_FS_ARCHIVESCAN_SIZE` replaces the
@@ -355,8 +362,28 @@ meant. A bare number is bytes.
   *would* live, by size. It is not the current migrated state: that needs
   block counts, which the Globus API does not provide, so archivescan's
   `--current-state`, `--print-offline` and `--recall` have no equivalent here.
-- Only regular files count. Symbolic links are skipped, and `.snapshot`
+- Only regular files count. Symbolic links are skipped, and `.snapshot` and `.snapshots`
   directories are not walked — a snapshot is another full copy of the tree.
+**Per directory, `-d N`.** The same split for each directory down to depth N,
+rolled up from the one walk, with the whole tree last. Same output as
+archivetar's `archivescan -d`:
+
+```
+$ globus-fs archivescan turbo:/mylab -d 1
+DATADEN_FILES  DATADEN_SIZE  CACHE_FILES  CACHE_SIZE  TOTAL_FILES  TOTAL_SIZE  OFFLINE%  PATH
+            3          4.8G            0           0            3        4.8G    100.00  ./raw
+            1          600M          300        2.4M          301        603M     99.61  ./scratch
+            0             0            0           0            0           0         -  ./empty
+            4          5.3G          300        2.4M          304        5.3G     99.96  .
+```
+
+The table uses `du -h` sizes for reading. **`--format tsv`, `csv` and `json`
+always give exact counts and bytes, never units**, so they sum and sort
+directly; with `-d`, a row per directory (JSON: a list). The keys match
+archivetar's `archivescan`: `path`, `threshold_bytes`, `dataden_files`,
+`dataden_bytes`, `cache_files`, `cache_bytes`, `total_files`, `total_bytes`,
+`fraction_offline`, `seconds`.
+
 - `--format tsv` or `csv` prints a header and one row, so a loop builds one
   table across many directories:
 

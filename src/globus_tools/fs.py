@@ -1117,7 +1117,7 @@ ARCHIVESCAN_DEFAULT_SIZE = "100M"
 
 #: Snapshot directories hold another full copy of the tree; walking them
 #: would multiply the counts, and they are never migrated anyway.
-ARCHIVESCAN_SKIP = (".snapshot",)
+ARCHIVESCAN_SKIP = (".snapshot", ".snapshots")  # NetApp and GPFS names
 
 
 def archivescan_threshold(text):
@@ -1167,64 +1167,201 @@ def cmd_archivescan(args):
     """Report how much of a tree is large enough for Data Den.
 
     A port of archivetar's ``archivescan`` for storage reached only through
-    Globus. It reports the "future state" -- where files would land by
-    size. The current migrated/resident state needs block counts, which the
-    Transfer API does not expose.
+    Globus, with the same keys and layout so output from both combines. It
+    reports the "future state" -- where files would land by size. The
+    current migrated/resident state needs block counts, which the Transfer
+    API does not expose.
+
+    With ``-d N``, one row per directory down to depth N, like ``du -d``,
+    each counting everything below it and the whole tree (``.``) last;
+    rolled up from the same walk, so it costs nothing extra.
 
     :param args: parsed arguments
     """
     threshold = archivescan_threshold(args.size)
     tc = args.tool.transfer_client(args)
     collection, root = _resolve_target(args, tc)
+    root = root.rstrip("/") or "/"
     start = time.time()
-    totals = [0, 0, 0, 0]
+    tallies = {}  # each directory's own files
     for path, _depth, entries in _walk_or_explain(
         args, tc, collection, root, skip=ARCHIVESCAN_SKIP
     ):
-        for i, n in enumerate(archivescan_tally(entries, path, threshold, args.filter)):
-            totals[i] += n
-    elapsed = time.time() - start
-    big_files, big_bytes, small_files, small_bytes = totals
+        tallies[path] = archivescan_tally(entries, path, threshold, args.filter)
+    seconds = round(time.time() - start, 2)
+    totals = archivescan_rollup(tallies, root, args.max_depth or 0)
+    entries = [
+        (
+            rel,
+            archivescan_row(
+                root if rel == "." else posixpath.join(root, rel[2:]),
+                tally,
+                threshold,
+                seconds,
+            ),
+        )
+        for rel, tally in totals.items()
+    ]
+    if args.max_depth is None:
+        row = dict(entries)["."]
+        if args.format == "table":
+            _print_archivescan(row)
+        else:
+            _print_archivescan_machine(args, [row], as_list=False)
+    else:
+        entries = _archivescan_sort(entries, args.sort)
+        if args.format == "table":
+            _print_archivescan_table(args, entries)
+        else:
+            _print_archivescan_machine(args, [r for _, r in entries], as_list=True)
+    _report_walk_errors(args)
+
+
+def archivescan_rollup(tallies, root, max_depth):
+    """Add each directory's own files into its ancestors, down to max_depth.
+
+    The same roll-up as archivetar's: every directory at or above max_depth
+    gets the total of everything below it, and ``.`` is the whole tree.
+
+    :param tallies: ``{absolute_path: [big_files, big_bytes, small_files,
+        small_bytes]}`` for each directory's own files
+    :param root: the walk root
+    :param max_depth: deepest level with its own row; 0 for only ``.``
+    :returns: ``{"." or "./sub/dir": tally}``
+    """
+    totals = {".": [0, 0, 0, 0]}
+    for path, tally in tallies.items():
+        rel = path[len(root) :].strip("/") if path != root else ""
+        parts = rel.split("/") if rel else []
+        for depth in range(min(len(parts), max_depth) + 1):
+            key = "./" + "/".join(parts[:depth]) if depth else "."
+            acc = totals.setdefault(key, [0, 0, 0, 0])
+            for i, n in enumerate(tally):
+                acc[i] += n
+    return totals
+
+
+def archivescan_row(path, tally, threshold, seconds):
+    """One result row, with archivetar's keys in archivetar's order.
+
+    :param path: the directory's absolute path
+    :param tally: ``[big_files, big_bytes, small_files, small_bytes]``
+    :param threshold: the size threshold in bytes
+    :param seconds: how long the whole scan took
+    :returns: the row, exact counts and bytes, no units
+    """
+    big_files, big_bytes, small_files, small_bytes = tally
     all_bytes = big_bytes + small_bytes
     fraction = 100.0 * big_bytes / all_bytes if all_bytes else None
-
-    row = {
-        "path": root,
+    return {
+        "path": path,
         "threshold_bytes": threshold,
         "dataden_files": big_files,
         "dataden_bytes": big_bytes,
         "cache_files": small_files,
         "cache_bytes": small_bytes,
+        "total_files": big_files + small_files,
+        "total_bytes": all_bytes,
         "fraction_offline": None if fraction is None else round(fraction, 5),
-        "seconds": round(elapsed, 2),
+        "seconds": seconds,
     }
+
+
+def _archivescan_sort(entries, key):
+    """Order the -d rows, keeping the ``.`` total last, as archivetar does.
+
+    :param entries: ``(relative path, row)`` pairs
+    :param key: ``size``, ``files``, ``cache``, ``offline`` or ``name``
+    :returns: the pairs in display order
+    """
+    keys = {
+        "size": lambda row: -row["total_bytes"],
+        "files": lambda row: -row["total_files"],
+        "cache": lambda row: -row["cache_files"],
+        # a directory with no files has no fraction: last
+        "offline": lambda row: (
+            row["fraction_offline"] is None,
+            -(row["fraction_offline"] or 0),
+        ),
+        "name": lambda row: 0,
+    }
+    total = [e for e in entries if e[0] == "."]
+    others = sorted(
+        (e for e in entries if e[0] != "."), key=lambda e: (keys[key](e[1]), e[0])
+    )
+    return others + total
+
+
+def _print_archivescan_machine(args, rows, as_list):
+    """Print rows as tsv, csv or json: exact counts and bytes, never units.
+
+    tsv and csv are one header and a row per directory, so a loop over many
+    trees builds one table; json is an object, or a list with ``-d``.
+
+    :param args: parsed arguments
+    :param rows: result rows from :func:`archivescan_row`
+    :param as_list: json as a list even for one row
+    """
     if args.format == "json":
-        json.dump(row, sys.stdout, indent=2)
+        json.dump(rows if as_list else rows[0], sys.stdout, indent=2)
         print()
-    elif args.format in ("tsv", "csv"):
-        # one row per scan, so a loop over many directories builds a table
-        writer = csv.writer(
-            sys.stdout,
-            delimiter="\t" if args.format == "tsv" else ",",
-            lineterminator="\n",
-        )
-        if not args.no_header:
-            writer.writerow([k.upper() for k in row])
+        return
+    writer = csv.writer(
+        sys.stdout,
+        delimiter="\t" if args.format == "tsv" else ",",
+        lineterminator="\n",
+    )
+    if not args.no_header:
+        writer.writerow([k.upper() for k in rows[0]])
+    for row in rows:
         writer.writerow(
             [
                 "" if v is None else safe(v) if isinstance(v, str) else v
                 for v in row.values()
             ]
         )
-    else:
-        _print_archivescan(row)
-    _report_walk_errors(args)
+
+
+def _print_archivescan_table(args, entries):
+    """The -d rows as an aligned table to read by eye, as archivetar's.
+
+    Numbers right-aligned with du -h sizes so magnitudes line up; the path
+    last, relative to the scan root, so long names do not break columns.
+
+    :param args: parsed arguments
+    :param entries: ``(relative path, row)`` pairs in display order
+    """
+    columns = (
+        ("DATADEN_FILES", lambda r: str(r["dataden_files"])),
+        ("DATADEN_SIZE", lambda r: human_size(r["dataden_bytes"])),
+        ("CACHE_FILES", lambda r: str(r["cache_files"])),
+        ("CACHE_SIZE", lambda r: human_size(r["cache_bytes"])),
+        ("TOTAL_FILES", lambda r: str(r["total_files"])),
+        ("TOTAL_SIZE", lambda r: human_size(r["total_bytes"])),
+        (
+            "OFFLINE%",
+            lambda r: (
+                "-" if r["fraction_offline"] is None else f"{r['fraction_offline']:.2f}"
+            ),
+        ),
+    )
+    cells = [[render(row) for _, render in columns] for _, row in entries]
+    widths = [
+        max([len(header)] + [len(line[i]) for line in cells])
+        for i, (header, _) in enumerate(columns)
+    ]
+    if not args.no_header:
+        heads = [h.rjust(widths[i]) for i, (h, _) in enumerate(columns)]
+        print("  ".join(heads + ["PATH"]))
+    for line, (rel, _) in zip(cells, entries):
+        padded = [c.rjust(widths[i]) for i, c in enumerate(line)]
+        print("  ".join(padded + [safe(rel)]))
 
 
 def _print_archivescan(row):
     """Print the report in archivetar's archivescan layout.
 
-    :param row: the scan results, as built by :func:`cmd_archivescan`
+    :param row: the scan results, as built by :func:`archivescan_row`
     """
     size = humanfriendly.format_size
     print("----- Results ------")
@@ -1237,6 +1374,10 @@ def _print_archivescan(row):
     print("Cache (Locker) Candidates:")
     print(f"Files: {row['cache_files']}")
     print(f"Size: {size(row['cache_bytes'], binary=True)}")
+    print("")
+    print("Total:")
+    print(f"Files: {row['total_files']}")
+    print(f"Size: {size(row['total_bytes'], binary=True)}")
     print("")
     print(f"Total Time {row['seconds']:.2f} Seconds")
     if row["fraction_offline"] is None:
@@ -1867,8 +2008,23 @@ def build_parser(in_shell=False):
         metavar="GLOB",
         help="only count files whose full path matches, e.g. '*.tar'",
     )
+    a.add_argument(
+        "-d",
+        "--max-depth",
+        type=int,
+        metavar="N",
+        help="one row per directory down to depth N, like du -d; each row "
+        "counts everything below it, and the last row (.) is the whole tree",
+    )
+    a.add_argument(
+        "--sort",
+        choices=("size", "files", "cache", "offline", "name"),
+        default="size",
+        help="order of the -d rows: total size, total files, cache files, "
+        "fraction offline (each largest first) or name (default: size)",
+    )
     add_common(a)
-    # always the whole tree, dotfiles included
+    # always the whole tree, dotfiles included; -d only limits the rows
     a.set_defaults(func=cmd_archivescan, maxdepth=None, no_hidden=False)
 
     col = sub.add_parser(
