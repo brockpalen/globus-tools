@@ -539,3 +539,94 @@ def test_incomplete_walk_sets_the_shell_status(sh, monkeypatch, capsys):
     sh.onecmd("du -s")
     assert sh.status == 1
     assert "/data" in capsys.readouterr().out
+
+
+# ---- completing names with spaces and quotes ------------------------------
+SPACED = "AI Refresher course p. 1.jpg"
+
+
+def readline_complete(shell, line):
+    """Complete at the end of a line the way readline does, then splice.
+
+    readline breaks words at every space, escaped or not, so ``text`` is
+    only what follows the last one; the completion replaces just that.
+
+    :param shell: the shell
+    :param line: the line typed so far
+    :returns: each completed line
+    """
+    begidx = max(line.rfind(c) for c in " \t|<>") + 1
+    text = line[begidx:]
+    return [
+        line[:begidx] + m for m in shell.completedefault(text, line, begidx, len(line))
+    ]
+
+
+@pytest.fixture
+def spaced(monkeypatch, at_data):
+    """Put a file whose name has spaces in /data.
+
+    :param monkeypatch: pytest's monkeypatch fixture
+    :param at_data: the shell in /data
+    :returns: the shell
+    """
+    from conftest import TREE
+
+    monkeypatch.setitem(TREE, "/data", TREE["/data"] + [(SPACED, "file", 1)])
+    return at_data
+
+
+@pytest.mark.parametrize("typed", ["AI", "AI\\ Ref", "AI\\ Refresher\\ course\\ p."])
+def test_completion_escapes_spaces(spaced, typed):
+    """The bug: Tab inserted the name bare, and mv saw five names."""
+    lines = readline_complete(spaced, f"mv {typed}")
+    assert lines == ["mv AI\\ Refresher\\ course\\ p.\\ 1.jpg"]
+    words, _, _ = split_line(lines[0] + " /elsewhere")
+    assert words == ["mv", SPACED, "/elsewhere"]
+
+
+@pytest.mark.parametrize("quote", ["'", '"'])
+def test_completion_inside_quotes(spaced, quote):
+    """Started with a quote: completed inside it, and it still parses."""
+    lines = readline_complete(spaced, f"mv {quote}AI Ref")
+    assert lines == [f"mv {quote}{SPACED}"]
+    words, _, _ = split_line(lines[0] + quote)
+    assert words == ["mv", SPACED]
+
+
+def test_completion_after_a_pipe_offers_filters(at_data):
+    """After |, Tab offers the allowed local filters, not remote names."""
+    assert readline_complete(at_data, "ls | w") == ["ls | wc"]
+    assert readline_complete(at_data, "ls | wc -") == []
+
+
+def test_completed_name_moves_as_one(spaced, client):
+    """End to end: the completed line renames the one file."""
+    (line,) = readline_complete(spaced, "mv AI")
+    spaced.onecmd(line + " project-b")
+    assert client.rename_calls == [(f"/data/{SPACED}", f"/data/project-b/{SPACED}")]
+
+
+def test_messages_keep_their_line_breaks(at_data, client, capsys, monkeypatch):
+    """Globus errors are several lines; escaping must not flatten them."""
+    from conftest import FakeAPIError
+
+    def not_found(collection, path, **kw):
+        """Fail as Great Lakes does for a missing path.
+
+        :param collection: ignored
+        :param path: quoted in the message
+        :param kw: ignored
+        """
+        raise FakeAPIError(
+            404,
+            "NotFound",
+            "Path not found, Error (list)\nEndpoint: umich#greatlakes\n"
+            f"Details: Error: '{path}' not found\r\n550 End.\n",
+        )
+
+    monkeypatch.setattr(client, "operation_stat", not_found)
+    at_data.onecmd("cd nowhere")
+    err = capsys.readouterr().err
+    assert "\\n" not in err and "\\r" not in err  # no literal escapes
+    assert "\nEndpoint: umich#greatlakes\nDetails:" in err

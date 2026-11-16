@@ -434,10 +434,13 @@ class GlobusShell(cmd.Cmd):
             self.status = 0
             return leave
         except ShellError as e:
-            print(f"globus-fs shell: {escape_text(e)}", file=sys.stderr)
+            print(
+                f"globus-fs shell: {escape_text(e, keep_newlines=True)}",
+                file=sys.stderr,
+            )
         except SystemExit as e:
             if isinstance(e.code, str):
-                print(escape_text(e.code), file=sys.stderr)
+                print(escape_text(e.code, keep_newlines=True), file=sys.stderr)
             elif not e.code:
                 self.status = 0
         except KeyboardInterrupt:
@@ -657,27 +660,128 @@ class GlobusShell(cmd.Cmd):
     def completedefault(self, text, line, begidx, endidx):
         """Complete a remote path from one (cached) directory listing.
 
-        :param text: the partial path
+        readline splits words at every space, even an escaped one, so
+        ``text`` may be only the end of the word. The real word is found
+        here, backslashes and quotes included, and each match is returned
+        escaped the same way, minus the part of it already before ``text``.
+
+        :param text: what readline will replace, from its last delimiter
         :param line: the whole line
         :param begidx: where ``text`` starts in ``line``
         :param endidx: where it ends
-        :returns: matching paths, directories with a trailing slash
+        :returns: replacements for ``text``
         """
-        if line.split()[0] in ("lcd", "help"):
-            return []
         try:
-            cut = text.rfind("/") + 1
-            prefix, partial = text[:cut], text[cut:]
-            collection, path, _ = self.resolve(prefix or None)
-            dirs_only = line.split()[0] == "cd"
+            stage, raw, piped = current_word(line[:endidx])
+            value, quote = unescape_partial(raw)
+            if stage.lstrip() == raw:  # the first word of a stage
+                # after |, only the allowed filters; the line's own first
+                # word is completenames' job
+                return sorted(f for f in FILTERS if f.startswith(text)) if piped else []
+            command = stage.split()[0]
+            if piped or command in ("lcd", "help"):
+                return []  # local words, nothing remote to offer
+            matches = self._path_matches(value, dirs_only=command == "cd")
+            already = raw[: len(raw) - len(text)]
             out = []
-            for e in self._listing(collection, path):
-                name = e.get("name", "")
-                is_dir = e.get("type") == "dir"
-                if escape_text(name) != name:
-                    continue  # would put control characters on the line
-                if name.startswith(partial) and (is_dir or not dirs_only):
-                    out.append(prefix + name + ("/" if is_dir else ""))
+            for match in matches:
+                word = quote_word(match, quote)
+                if word is not None and word.startswith(already):
+                    out.append(word[len(already) :])
             return out
         except Exception:  # nosec B110 - completion must never break the prompt
             return []
+
+    def _path_matches(self, value, dirs_only=False):
+        """Remote paths starting with what has been typed.
+
+        :param value: the partial path, unescaped
+        :param dirs_only: offer directories only, for cd
+        :returns: full paths as typed, directories with a trailing slash
+        """
+        cut = value.rfind("/") + 1
+        prefix, partial = value[:cut], value[cut:]
+        collection, path, _ = self.resolve(prefix or None)
+        out = []
+        for e in self._listing(collection, path):
+            name = e.get("name", "")
+            is_dir = e.get("type") == "dir"
+            if escape_text(name) != name:
+                continue  # would put control characters on the line
+            if name.startswith(partial) and (is_dir or not dirs_only):
+                out.append(prefix + name + ("/" if is_dir else ""))
+        return out
+
+
+#: Characters a word needs a backslash before, to stay one word.
+_SPECIAL = frozenset(" \t\n\\'\"|<>;&`")
+
+
+def current_word(text):
+    """Find the word being typed at the end of a line, and its stage.
+
+    :param text: the line up to the cursor
+    :returns: ``(stage_text, raw_word, piped)``: the text after the last
+        unquoted ``|``, the word after the last unquoted, unescaped space,
+        and whether a ``|`` came before it
+    """
+    quote, escaped = None, False
+    word_start = stage_start = 0
+    for i, c in enumerate(text):
+        if escaped:
+            escaped = False
+        elif c == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if c == quote:
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c in " \t":
+            word_start = i + 1
+        elif c in "|<>":
+            word_start = i + 1
+            if c == "|":
+                stage_start = i + 1
+    return text[stage_start:], text[word_start:], stage_start > 0
+
+
+def unescape_partial(raw):
+    """Undo backslashes and quotes in a word that may be unfinished.
+
+    :param raw: the word as typed
+    :returns: ``(value, open_quote)``; open_quote is ``'`` or ``"`` if the
+        word is inside an unclosed quote, else None
+    """
+    out, quote, escaped = [], None, False
+    for c in raw:
+        if escaped:
+            out.append(c)
+            escaped = False
+        elif c == "\\" and quote != "'":
+            escaped = True
+        elif quote:
+            if c == quote:
+                quote = None
+            else:
+                out.append(c)
+        elif c in "'\"":
+            quote = c
+        else:
+            out.append(c)
+    return "".join(out), quote
+
+
+def quote_word(value, quote=None):
+    """Write a value back as one word, in the quoting style being used.
+
+    :param value: the unescaped text
+    :param quote: the open quote the user typed, or None for backslashes
+    :returns: the word, or None if it cannot be written that way (a single
+        quote inside single quotes)
+    """
+    if quote == "'":
+        return None if "'" in value else "'" + value
+    if quote == '"':
+        return '"' + "".join("\\" + c if c in '"\\`' else c for c in value)
+    return "".join("\\" + c if c in _SPECIAL else c for c in value)
