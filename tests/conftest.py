@@ -195,6 +195,16 @@ class FakeTransferClient:
             raise FakeAPIError(403, "PermissionDenied", f"denied: {path}")
         tree = self.tree
         key = path if path in tree else (path.rstrip("/") or "/")
+        parent, _, name = key.rpartition("/")
+        if key not in tree and any(
+            n == name for n, _, _ in tree.get(parent or "/", [])
+        ):
+            # as Globus does when asked to list a file
+            raise FakeAPIError(
+                502,
+                "ExternalError.DirListingFailed.NotDirectory",
+                f"The path '{path}' is not a directory",
+            )
         if key not in tree:
             raise FakeAPIError(404, "ClientError.NotFound", f"no such path {path}")
         # "dirlink"/"filelink" model what Globus returns for a symlink: the
@@ -270,10 +280,16 @@ class FakeTransferClient:
         new_parent, new_name = newpath.rsplit("/", 1)
         old_parent, new_parent = old_parent or "/", new_parent or "/"
         if new_parent in self.exdev:
+            # verbatim from Great Lakes, renaming /scratch/... to /home/...
             raise FakeAPIError(
                 502,
-                "ExternalError.RenameFailed",
-                "Rename failed: Invalid cross-device link\n550-GridFTP-Errno: 18",
+                "EndpointError",
+                "Endpoint Error, Error (rename)\nEndpoint: umich#greatlakes\n"
+                f"Command: RNTO {newpath}\nMessage: Fatal FTP Response\n---\n"
+                "Details: 451-GlobusError: v=1 c=INTERNAL_ERROR\r\n"
+                "451-GridFTP-Errno: 18\r\n451-GridFTP-Reason: System error in "
+                "rename\r\n451-GridFTP-Error-String: Invalid cross-device link"
+                "\r\n451 End.\n",
             )
         entry = next((e for e in tree.get(old_parent, []) if e[0] == old_name), None)
         if entry is None:

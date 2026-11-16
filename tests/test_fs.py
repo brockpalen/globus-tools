@@ -333,3 +333,16 @@ def test_ls_recursive_walks_the_tree(run):
 def test_mode_string_for_a_symlink():
     """An unreadable permission set degrades rather than raising."""
     assert fs._mode_string({"type": "file", "permissions": None}).startswith("-?")
+
+
+def test_ls_of_a_file_shows_that_file(run, capsys):
+    """ls -l FILE, as ls does: Globus only lists directories, so stat it."""
+    run(["ls", "-l", f"{COLL}:/data/readme.txt"])
+    out = capsys.readouterr().out
+    assert "/data/readme.txt" in out and "1024" in out and out.startswith("-rw")
+
+
+def test_ls_of_a_missing_path_is_still_an_error(run):
+    """Only a file falls back to stat; a missing path is an error."""
+    with pytest.raises(SystemExit):
+        run(["ls", f"{COLL}:/data/nope"])

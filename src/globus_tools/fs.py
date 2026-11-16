@@ -214,7 +214,7 @@ def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
     if not produced and walker.errors:
         first = walker.errors[0]
         if first.needs_login or first.code == "PermissionDenied":
-            sys.stderr.write(escape_text(first) + "\n")
+            sys.stderr.write(escape_text(first, keep_newlines=True) + "\n")
             if first.needs_login:
                 # on a terminal the login happens in place, so this only
                 # happens without one
@@ -245,7 +245,7 @@ def _report_walk_errors(args):
         f"\n{len(walker.errors)} director(y/ies) could not be listed:", file=sys.stderr
     )
     for err in shown:
-        print(f"  {escape_text(err)}", file=sys.stderr)
+        print(f"  {escape_text(err, keep_newlines=True)}", file=sys.stderr)
     if len(walker.errors) > len(shown):
         print(f"  ... and {len(walker.errors) - len(shown)} more", file=sys.stderr)
     sys.exit(1)
@@ -590,7 +590,14 @@ def cmd_ls_fs(args):
     try:
         entries = list(args.tool.call(tc.operation_ls, collection, **kwargs))
     except globus_sdk.TransferAPIError as e:
-        args.tool.api_error(e)
+        if "NotDirectory" not in (e.code or ""):
+            args.tool.api_error(e)
+        # ls FILE shows that one file, as ls does; Globus only lists
+        # directories, so stat it instead
+        entry = _stat_or_none(args, tc, collection, path)
+        if entry is None:
+            args.tool.api_error(e)
+        entries = [dict(entry, name=path)]
     _ls_emit(args, [(e, _ls_name(e, args)) for e in _ls_sort(entries, args)])
 
 
@@ -756,7 +763,7 @@ def cmd_mv(args):
             elif globus_fs._needs_login(e):
                 args.tool.api_error(e)  # needs a login: explain and stop
             else:
-                reason = escape_text(e.message)
+                reason = escape_text(e.message, keep_newlines=True)
             print(
                 f"mv: cannot move {escape_text(src)} to {escape_text(target)}: "
                 f"{reason}",

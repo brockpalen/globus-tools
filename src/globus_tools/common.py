@@ -326,7 +326,7 @@ class Tool:
         """
         gare = _to_gare(e)
         # API messages quote paths, which can hold any character
-        message = escape_text(e.message)
+        message = escape_text(e.message, keep_newlines=True)
         if gare is not None:
             sys.exit(f"{e.code}: {message}\n\n" + self._login_advice(gare))
         if e.http_status == 403:
@@ -523,7 +523,7 @@ _NAMED = {"\n": "\\n", "\t": "\\t", "\r": "\\r"}
 _FORCE_TERMINAL = None
 
 
-def escape_text(text) -> str:
+def escape_text(text, keep_newlines=False) -> str:
     """Show control and direction characters as visible escapes.
 
     ``evil\x1b]0;x\x07`` prints as those characters, not as a command
@@ -531,8 +531,15 @@ def escape_text(text) -> str:
     the same.
 
     :param text: anything; converted with ``str``
+    :param keep_newlines: keep line breaks, for multi-line messages such as
+        Globus errors; ``\r\n`` becomes ``\n``, and a lone ``\r``, which
+        could overwrite a line on screen, is still escaped
     :returns: the text, safe to write to a terminal
     """
+    if keep_newlines:
+        return "\n".join(
+            escape_text(line) for line in str(text).replace("\r\n", "\n").split("\n")
+        )
 
     def visible(match):
         ch = match.group()
