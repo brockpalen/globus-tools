@@ -126,8 +126,8 @@ def _resolve_target(args, tc):
         return collection, _join_within(base, tail)
 
     sys.exit(
-        f"'{head}' is not a collection UUID, a bookmark or a known "
-        f"collection name.\n" + _known_names_hint(tc)
+        f"'{escape_text(head)}' is not a collection UUID, a bookmark or a "
+        f"collection shortcut.\n" + _known_names_hint(tc, head)
     )
 
 
@@ -150,14 +150,64 @@ def lookup_name(tc, name):
     return None
 
 
-def _known_names_hint(tc):
+def search_collections(tc, text, limit=5):
+    """Find collections by their Globus display name.
+
+    Display names are not unique, so they are never used as targets; this
+    is for suggesting a UUID, or looking one up on purpose.
+
+    :param tc: an authenticated Transfer client
+    :param text: words from the display name
+    :param limit: how many to return
+    :returns: collection documents (endpoints themselves are left out),
+        empty if the search fails
+    """
+    try:
+        found = [dict(e) for e in tc.endpoint_search(filter_fulltext=text, limit=25)]
+    except globus_sdk.GlobusAPIError:
+        return []
+    found = [e for e in found if e.get("entity_type") != "GCSv5_endpoint"]
+    # Globus's search is fuzzy ("den" finds Denver); names holding the whole
+    # text come first, otherwise in Globus's order
+    wanted = text.lower()
+    found.sort(key=lambda e: wanted not in (e.get("display_name") or "").lower())
+    return found[:limit]
+
+
+def display_name_hint(tc, name):
+    """Suggest Globus collections whose display name matches a name.
+
+    :param tc: an authenticated Transfer client
+    :param name: the name that was not a bookmark or shortcut
+    :returns: lines to add to an error message, or an empty string
+    """
+    found = search_collections(tc, name)
+    if not found:
+        return ""
+    width = max(len(escape_text(e.get("display_name") or "")) for e in found)
+    lines = ["", f"Globus collections matching '{escape_text(name)}':"]
+    for e in found:
+        title = escape_text(e.get("display_name") or "-")
+        lines.append(f"    {title.ljust(width)}  {e.get('id')}")
+    short = name if globus_collections.valid_name(name) else "<name>"
+    lines.append(
+        f"To give one a short name:  globus-fs bookmark create "
+        f"{found[0].get('id')}:/ {escape_text(short)}"
+    )
+    return "\n".join(lines)
+
+
+def _known_names_hint(tc, name=None):
     """Build the "here is what would have worked" text for a bad target.
 
     Names both sources explicitly, and says when one of them is empty --
     silently omitting it leaves the reader guessing whether the name was
-    wrong or the feature is simply unconfigured here.
+    wrong or the feature is simply unconfigured here. With the name that
+    failed, also suggests Globus collections whose display name matches,
+    since that is the name people know from the web app.
 
     :param tc: an authenticated Transfer client
+    :param name: the name that was not found, if any
     :returns: a message listing the available names
     """
     lines = []
@@ -182,7 +232,7 @@ def _known_names_hint(tc):
 
     lines.append("")
     lines.append("A collection UUID always works:  globus-fs du <uuid>:/path")
-    return "\n".join(lines)
+    return "\n".join(lines) + (display_name_hint(tc, name) if name else "")
 
 
 def _walk_or_explain(args, tc, collection, path, maxdepth=None, skip=()):
@@ -1421,11 +1471,58 @@ def _no_shortcuts_message():
     return "\n".join(lines)
 
 
+def _collections_search(args):
+    """List Globus collections whose display name matches, with their UUIDs.
+
+    :param args: parsed arguments, carrying ``search``
+    """
+    tc = args.tool.transfer_client(args)
+    found = search_collections(tc, args.search, limit=25)
+    if args.format == "json":
+        json.dump(found, sys.stdout, indent=2, default=str)
+        print()
+        return
+    if not found:
+        sys.exit(f"no Globus collection matches '{escape_text(args.search)}'")
+    rows = [
+        (
+            safe(e.get("display_name") or "-"),
+            e.get("id") or "-",
+            safe(e.get("owner_string") or "-"),
+        )
+        for e in found
+    ]
+    headers = ("DISPLAY_NAME", "COLLECTION", "OWNER")
+    if args.format in ("tsv", "csv"):
+        writer = csv.writer(
+            sys.stdout,
+            delimiter="\t" if args.format == "tsv" else ",",
+            lineterminator="\n",
+        )
+        if not args.no_header:
+            writer.writerow(headers)
+        writer.writerows(rows)
+        return
+    widths = [max([len(r[i]) for r in rows] + [len(headers[i])]) for i in range(3)]
+    if not args.no_header:
+        print("  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)).rstrip())
+    for row in rows:
+        print("  ".join(c.ljust(widths[i]) for i, c in enumerate(row)).rstrip())
+    sys.stdout.flush()  # the table first, then the hint, even when piped
+    print(
+        "\nTo give one a short name:  globus-fs bookmark create <COLLECTION>:/ <name>",
+        file=sys.stderr,
+    )
+
+
 def cmd_collections(args):
     """List the configured collection shortcuts and where they came from.
 
     :param args: parsed arguments
     """
+    if args.search:
+        _collections_search(args)
+        return
     shortcuts = site_shortcuts()
     if args.format == "json":
         json.dump(
@@ -1728,8 +1825,8 @@ def build_parser(in_shell=False):
         sp.add_argument(
             "target",
             nargs=several_nargs if several else target_nargs,
-            help="COLLECTION_UUID:/path, or a bookmark name "
-            "(see the 'bookmark' command)",
+            help="COLLECTION_UUID:/path, or a bookmark or collection shortcut "
+            "name (see 'globus-fs collections')",
         )
         sp.add_argument(
             "-j",
@@ -1766,7 +1863,8 @@ def build_parser(in_shell=False):
     lsp.add_argument(
         "target",
         nargs=several_nargs,
-        help="COLLECTION_UUID:/path, or a bookmark name; several allowed",
+        help="COLLECTION_UUID:/path, or a bookmark or collection shortcut name; "
+        "several allowed",
     )
     lsp.add_argument(
         "-l", "--long", action="store_true", help="mode, owner, size and mtime"
@@ -1835,7 +1933,8 @@ def build_parser(in_shell=False):
     st.add_argument(
         "target",
         nargs=several_nargs,
-        help="COLLECTION_UUID:/path, or a bookmark name; several allowed",
+        help="COLLECTION_UUID:/path, or a bookmark or collection shortcut name; "
+        "several allowed",
     )
     st.add_argument(
         "--local-user", help="map to this local account (GCSv5 mapped collections)"
@@ -2034,6 +2133,12 @@ def build_parser(in_shell=False):
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     col.add_argument(
+        "--search",
+        metavar="TEXT",
+        help="find Globus collections by display name, as the web app shows "
+        "them, to get a UUID for a bookmark",
+    )
+    col.add_argument(
         "--check-bookmarks",
         action="store_true",
         help="also flag names your own bookmarks shadow (makes an API call)",
@@ -2095,8 +2200,9 @@ def build_parser(in_shell=False):
         sh.add_argument(
             "target",
             nargs="?",
-            help="where to start: COLLECTION_UUID:/path, or a bookmark or "
-            "collection name",
+            help="where to start: COLLECTION_UUID[:/path], or a bookmark or "
+            "collection shortcut name (see 'globus-fs collections'); a name "
+            "alone starts at its location",
         )
         sh.set_defaults(func=cmd_shell)
 
