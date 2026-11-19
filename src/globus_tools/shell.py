@@ -396,8 +396,9 @@ class GlobusShell(cmd.Cmd):
                     return collection, normalize(fs._join_within(base, tail)), head
         if self.here is None:
             raise ShellError(
-                "not on a collection yet: cd NAME: or cd UUID:/path first "
-                "('collections' and 'bookmark list' show the names)"
+                "not on a collection yet: cd NAME: or cd UUID:/path first, "
+                "where NAME is a bookmark or collection shortcut "
+                "('collections' and 'bookmark list' show them)"
             )
         collection, cwd, entered = self.here
         if not text or text == ".":
@@ -405,6 +406,27 @@ class GlobusShell(cmd.Cmd):
         if text == "~" or text.startswith("~/"):
             return collection, normalize("/~/" + text[2:]), entered
         return collection, normalize(posixpath.join(cwd, text)), entered
+
+    def _start_location(self, start):
+        """Accept a bare name or UUID as where to start, as ls does.
+
+        With nothing to be relative to yet, ``dataden`` can only mean the
+        shortcut or bookmark, so it starts at ``dataden:``.
+
+        :param start: the target given to ``globus-fs shell``
+        :returns: the target to cd to, or None after explaining a bad one
+        """
+        if ":" in start:
+            return start
+        if is_uuid(start) or self._is_location(start):
+            return start + ":"
+        print(
+            f"globus-fs shell: '{escape_text(start)}' is not a collection UUID, "
+            "a bookmark or a collection shortcut.\n"
+            + fs._known_names_hint(self.tc, start),
+            file=sys.stderr,
+        )
+        return None
 
     # ---- names for humans ------------------------------------------------
     def _names_on(self, collection):
@@ -516,7 +538,10 @@ class GlobusShell(cmd.Cmd):
         :returns: the status of the last command, as a script would see it
         """
         if self.start:
-            self.onecmd(f"cd {shlex.quote(self.start)}")
+            start = self._start_location(self.start)
+            if start is None:
+                return 1
+            self.onecmd(f"cd {shlex.quote(start)}")
             if self.status:
                 return self.status
         if self.interactive:
@@ -835,6 +860,8 @@ class GlobusShell(cmd.Cmd):
             try:
                 entry = self.tool.call(self.tc.operation_stat, collection, path)
             except globus_sdk.GlobusAPIError as e:
+                if e.http_status == 404 and words:
+                    self._cd_hint(words[0])
                 self.tool.api_error(e)
             if entry.get("type") != "dir":
                 raise ShellError(f"{path}: not a directory")
@@ -843,6 +870,37 @@ class GlobusShell(cmd.Cmd):
             self.home = target
         self.previous, self.here = self.here, target
         self._set_prompt()
+
+    def _cd_hint(self, word):
+        """Explain a cd that found nothing, when the word looks like a name.
+
+        ``cd dataden`` means a subdirectory, as in any shell; if there is
+        none but a shortcut or bookmark has that name, say how to reach it.
+        ``cd nosuch:`` names nothing known; suggest Globus collections whose
+        display name matches.
+
+        :param word: what was typed after cd
+        :raises ShellError: with the hint, when there is one
+        """
+        head, sep, _ = word.partition(":")
+        if not head or "/" in head or is_uuid(head):
+            return
+        if not sep and self._is_location(head):
+            kind = (
+                "bookmark"
+                if fs.resolve_bookmark(self.tc, head)
+                else "collection shortcut"
+            )
+            raise ShellError(
+                f"no directory {escape_text(word)} here. For your {kind} of "
+                f"that name: cd {escape_text(head)}:"
+            )
+        if sep and not self._is_location(head):
+            raise ShellError(
+                f"no directory {escape_text(word)} here, and no bookmark or "
+                f"collection shortcut named {escape_text(head)}."
+                + fs.display_name_hint(self.tc, head)
+            )
 
     def builtin_pwd(self, words):
         """pwd [-u | -v]: where you are, in a form you can paste back.

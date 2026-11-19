@@ -172,6 +172,8 @@ class FakeTransferClient:
         self.exdev = set(exdev)
         self._own_tree = None  # copied from TREE on the first write
         self.mkdir_calls = []
+        self.search_results = []
+        self.searches = []
         self.rename_calls = []
         self.events = list(events)
         self.unlistable = set(unlistable)
@@ -349,6 +351,22 @@ class FakeTransferClient:
         return list(self.events)
 
     endpoint_manager_task_event_list = task_event_list
+
+    def endpoint_search(self, filter_fulltext=None, **kwargs):
+        """Search collections by display name.
+
+        :param filter_fulltext: the words searched for, recorded
+        :param kwargs: accepted and ignored
+        :returns: the documents in ``search_results`` whose display name
+            contains the text, ignoring case
+        """
+        self.searches.append(filter_fulltext)
+        text = (filter_fulltext or "").lower()
+        return [
+            dict(e)
+            for e in self.search_results
+            if text in (e.get("display_name") or "").lower()
+        ]
 
     def endpoint_manager_monitored_endpoints(self):
         """Collections the identity may monitor.
