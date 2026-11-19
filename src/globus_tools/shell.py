@@ -61,6 +61,46 @@ FIND_ALIASES = {
     "-maxdepth": "--maxdepth",
 }
 
+#: Prompt colours (ANSI SGR): cyan label, amber for high assurance, bold path.
+LABEL_COLOR = "36"
+HA_COLOR = "1;33"
+PATH_COLOR = "1"
+
+
+def use_color():
+    """Whether the prompt is coloured.
+
+    ``GLOBUS_FS_COLOR=always|never|auto`` decides; auto, the default, means
+    an interactive terminal, without ``NO_COLOR`` set or ``TERM=dumb``.
+
+    :returns: True to colour the prompt
+    """
+    choice = os.environ.get("GLOBUS_FS_COLOR", "auto").lower()
+    if choice == "always":
+        return True
+    if choice == "never":
+        return False
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _paint(code, text):
+    """Colour text for the prompt, marked so readline counts its width right.
+
+    ``\\001``/``\\002`` tell readline the escape codes take no space;
+    without them line editing miscounts the prompt.
+
+    :param code: the SGR code, e.g. ``"36"``
+    :param text: the text, already escaped
+    :returns: the coloured text
+    """
+    return f"\001\033[{code}m\002{text}\001\033[0m\002"
+
+
 #: Seconds a directory listing is reused for tab completion.
 COMPLETION_TTL = 30
 
@@ -343,7 +383,7 @@ class GlobusShell(cmd.Cmd):
         self.status = 0
         self._tc = None
         self._cache = {}
-        self._display_names = {}
+        self._collections = {}  # UUID -> its Globus document, fetched once
         self._set_prompt()
 
     # ---- state ----------------------------------------------------------
@@ -358,15 +398,28 @@ class GlobusShell(cmd.Cmd):
         return self._tc
 
     def _set_prompt(self):
-        """Show the collection and directory, and nothing when scripted."""
+        """Show the collection and directory, and nothing when scripted.
+
+        A high assurance collection is marked ``HA`` in words, not only in
+        colour; colour, when on, makes the label cyan (amber for high
+        assurance) and the path bold.
+        """
         if not self.interactive:
             self.prompt = ""
-        elif self.here is None:
+            return
+        if self.here is None:
             self.prompt = "(no collection)> "
-        else:
-            collection, path, entered = self.here
-            label = self.label(collection, path, entered)
-            self.prompt = f"[{escape_text(label)}] {escape_text(path)}> "
+            return
+        collection, path, entered = self.here
+        label = escape_text(self.label(collection, path, entered))
+        high = self.high_assurance(collection)
+        if high:
+            label += " HA"
+        path = escape_text(path)
+        if use_color():
+            label = _paint(HA_COLOR if high else LABEL_COLOR, label)
+            path = _paint(PATH_COLOR, path)
+        self.prompt = f"[{label}] {path}> "
 
     def resolve(self, text):
         """Turn what was typed into a collection, a path and how it was named.
@@ -484,13 +537,29 @@ class GlobusShell(cmd.Cmd):
         :param collection: the collection UUID
         :returns: the display name, or None if it cannot be had
         """
-        if collection not in self._display_names:
+        return self._collection(collection).get("display_name") or None
+
+    def high_assurance(self, collection):
+        """Whether Globus marks a collection as high assurance.
+
+        :param collection: the collection UUID
+        :returns: True for a high assurance collection
+        """
+        return bool(self._collection(collection).get("high_assurance"))
+
+    def _collection(self, collection):
+        """A collection's Globus document, fetched once per session.
+
+        :param collection: the collection UUID
+        :returns: the document, or an empty dict if it cannot be had
+        """
+        if collection not in self._collections:
             try:
                 doc = self.tool.call(self.tc.get_endpoint, collection)
-                self._display_names[collection] = doc.get("display_name") or None
+                self._collections[collection] = dict(doc.data)
             except globus_sdk.GlobusAPIError:
-                self._display_names[collection] = None
-        return self._display_names[collection]
+                self._collections[collection] = {}
+        return self._collections[collection]
 
     def label(self, collection, path, entered=None):
         """What the prompt calls the current collection.
@@ -924,6 +993,10 @@ class GlobusShell(cmd.Cmd):
             print(f"      name: {safe(named[1]) if named else '-'}")
             print(f"collection: {safe(self.display_name(collection) or '-')}")
             print(f"      uuid: {safe(uuid_form)}")
+            print(
+                "high assurance: "
+                + ("yes" if self.high_assurance(collection) else "no")
+            )
 
     def builtin_lcd(self, words):
         """lcd [DIR]: change the local directory > and >> write in.

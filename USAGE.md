@@ -412,6 +412,14 @@ back to the same place.
 `globus-fs shell dataden` starts at the `dataden` bookmark or shortcut; a
 bare UUID starts at its root, as with `ls`.
 
+**The prompt** is coloured on a terminal: the collection in cyan, the path in
+bold. A **high assurance** collection (one Globus marks for CUI or PHI) shows
+`HA` after its name, in amber, as a reminder that names and output there may
+be sensitive: `[armis2 HA] /home/me>`. The `HA` is always there, colour or
+not. `GLOBUS_FS_COLOR=never` turns colour off (as does `NO_COLOR`, or
+`TERM=dumb`); `always` keeps it on. `pwd -v` also says whether the collection
+is high assurance.
+
 **Not a filesystem.** Nothing is mounted and no file is read: each command
 is the same Globus API call `globus-fs` makes, and the prompt always names
 the collection. What the shell adds is a current directory, so paths are

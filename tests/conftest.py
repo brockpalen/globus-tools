@@ -173,6 +173,7 @@ class FakeTransferClient:
         self._own_tree = None  # copied from TREE on the first write
         self.mkdir_calls = []
         self.search_results = []
+        self.high_assurance = set()  # collection ids flagged high assurance
         self.searches = []
         self.rename_calls = []
         self.events = list(events)
@@ -382,7 +383,13 @@ class FakeTransferClient:
         :returns: a response carrying the display name
         """
         self.endpoint_calls.append(collection)
-        return FakeResponse({"id": collection, "display_name": DISPLAY_NAME})
+        return FakeResponse(
+            {
+                "id": collection,
+                "display_name": DISPLAY_NAME,
+                "high_assurance": collection in self.high_assurance,
+            }
+        )
 
     def bookmark_list(self):
         """Return the fake bookmarks.
