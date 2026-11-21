@@ -1790,7 +1790,7 @@ def cmd_shell(args):
     """
     from .shell import GlobusShell
 
-    status = GlobusShell(args.tool, start=args.target).run()
+    status = GlobusShell(args.tool, start=args.target, black_on_white=args.bw).run()
     if status:
         sys.exit(status)
 
@@ -2203,6 +2203,14 @@ def build_parser(in_shell=False):
             help="where to start: COLLECTION_UUID[:/path], or a bookmark or "
             "collection shortcut name (see 'globus-fs collections'); a name "
             "alone starts at its location",
+        )
+        sh.add_argument(
+            "--bw",
+            "--black-on-white",
+            "--blackonwhite",
+            dest="bw",
+            action="store_true",
+            help="prompt colours for a white-background terminal, as dstat's " "--bw",
         )
         sh.set_defaults(func=cmd_shell)
 

@@ -61,10 +61,17 @@ FIND_ALIASES = {
     "-maxdepth": "--maxdepth",
 }
 
-#: Prompt colours (ANSI SGR): cyan label, amber for high assurance, bold path.
-LABEL_COLOR = "36"
-HA_COLOR = "1;33"
+#: Prompt colours, as dstat's: the 16 basic ANSI colours, which every
+#: terminal theme tunes for its own background (256-colour codes are fixed
+#: shades the theme cannot adjust, and wash out on white). Bold blue for
+#: the collection, as ls shows directories; bold white on red for high
+#: assurance, as dstat shows errors; the path bold in the terminal's colour.
+LABEL_COLOR = "1;34"
+HA_COLOR = "1;37;41"
 PATH_COLOR = "1"
+
+#: With --bw: dstat's black-on-white blue, which bold can turn too light.
+LABEL_COLOR_BW = "0;34"
 
 
 def use_color():
@@ -366,15 +373,17 @@ def normalize(path):
 class GlobusShell(cmd.Cmd):
     """The interactive loop, with one collection and directory at a time."""
 
-    def __init__(self, tool, start=None):
+    def __init__(self, tool, start=None, black_on_white=False):
         """Set up a shell; nothing touches the API until it runs.
 
         :param tool: the globus-fs :class:`~globus_tools.common.Tool`
         :param start: where to begin, as typed after ``globus-fs shell``
+        :param black_on_white: colours for a white terminal (``--bw``)
         """
         super().__init__()
         self.tool = tool
         self.start = start
+        self.black_on_white = black_on_white
         self.parser = fs.build_parser(in_shell=True)
         self.interactive = sys.stdin.isatty()
         self.here = None  # (collection, path, name it was entered by, or None)
@@ -401,8 +410,8 @@ class GlobusShell(cmd.Cmd):
         """Show the collection and directory, and nothing when scripted.
 
         A high assurance collection is marked ``HA`` in words, not only in
-        colour; colour, when on, makes the label cyan (amber for high
-        assurance) and the path bold.
+        colour; colour, when on, makes the label bold blue (white on red for
+        high assurance) and the path bold, as dstat colours its output.
         """
         if not self.interactive:
             self.prompt = ""
@@ -417,7 +426,8 @@ class GlobusShell(cmd.Cmd):
             label += " HA"
         path = escape_text(path)
         if use_color():
-            label = _paint(HA_COLOR if high else LABEL_COLOR, label)
+            plain = LABEL_COLOR_BW if self.black_on_white else LABEL_COLOR
+            label = _paint(HA_COLOR if high else plain, label)
             path = _paint(PATH_COLOR, path)
         self.prompt = f"[{label}] {path}> "
 

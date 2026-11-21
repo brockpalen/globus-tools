@@ -27,13 +27,67 @@ def sh(monkeypatch, client):
 
 
 def test_colour_always(sh, monkeypatch):
-    """Cyan label, bold path, each wrapped for readline."""
+    """dstat-style: bold blue label, bold path, each wrapped for readline."""
     monkeypatch.setenv("GLOBUS_FS_COLOR", "always")
     sh.onecmd("cd projects:")
     assert sh.prompt == (
-        "[\x01\x1b[36m\x02projects\x01\x1b[0m\x02] "
+        "[\x01\x1b[1;34m\x02projects\x01\x1b[0m\x02] "
         "\x01\x1b[1m\x02/data\x01\x1b[0m\x02> "
     )
+
+
+def test_only_the_16_basic_colours_are_used(sh, client, monkeypatch):
+    """No 256-colour codes: those are fixed shades a terminal theme can't adjust."""
+    monkeypatch.setenv("GLOBUS_FS_COLOR", "always")
+    client.high_assurance.add(COLLECTION)
+    sh.onecmd("cd projects:")
+    assert "38;5;" not in sh.prompt and "38;2;" not in sh.prompt
+
+
+def test_black_on_white(sh, monkeypatch):
+    """--bw: dstat's white-background blue, not bold."""
+    monkeypatch.setenv("GLOBUS_FS_COLOR", "always")
+    sh.black_on_white = True
+    sh.onecmd("cd projects:")
+    assert "\x1b[0;34m\x02projects" in sh.prompt
+
+
+def test_black_on_white_keeps_the_ha_badge(sh, client, monkeypatch):
+    """--bw changes the label's blue; HA stays white on red, readable on white."""
+    monkeypatch.setenv("GLOBUS_FS_COLOR", "always")
+    sh.black_on_white = True
+    client.high_assurance.add(COLLECTION)
+    sh.onecmd("cd projects:")
+    assert "\x1b[1;37;41m\x02projects HA" in sh.prompt
+
+
+@pytest.mark.parametrize("flag", ["--bw", "--black-on-white", "--blackonwhite"])
+def test_bw_flag_reaches_the_shell(monkeypatch, flag):
+    """globus-fs shell --bw, spelled as dstat and dool spell it."""
+    seen = {}
+
+    class Recorder:
+        """Stands in for the shell, recording how it was made."""
+
+        def __init__(self, tool, start=None, black_on_white=False):
+            """Record the setting.
+
+            :param tool: ignored
+            :param start: ignored
+            :param black_on_white: recorded
+            """
+            seen["bw"] = black_on_white
+
+        def run(self):
+            """Finish at once.
+
+            :returns: 0
+            """
+            return 0
+
+    monkeypatch.setattr(shell, "GlobusShell", Recorder)
+    fs.main(["shell", flag])
+    assert seen["bw"] is True
 
 
 class _Tty:
@@ -95,11 +149,11 @@ def test_high_assurance_is_marked_in_words(sh, client, monkeypatch):
 
 
 def test_high_assurance_colour(sh, client, monkeypatch):
-    """With colour, the high assurance label is amber."""
+    """With colour, high assurance is bold white on red, as dstat shows errors."""
     monkeypatch.setenv("GLOBUS_FS_COLOR", "always")
     client.high_assurance.add(COLLECTION)
     sh.onecmd("cd projects:")
-    assert "\x1b[1;33m\x02projects HA" in sh.prompt
+    assert "\x1b[1;37;41m\x02projects HA" in sh.prompt
 
 
 def test_pwd_v_reports_high_assurance(sh, client, capsys):
