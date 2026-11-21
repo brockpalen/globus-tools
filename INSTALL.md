@@ -83,6 +83,7 @@ optional.
 | --- | --- |
 | `GLOBUS_FS_COLLECTIONS` | colon-separated collection shortcut files; format in the [README](README.md#collection-shortcuts). `/etc/globus-fs/collections.conf` is always read too. A file anyone can write is ignored; group-writable is fine, so a lab can keep its own in a module of its own |
 | `GLOBUS_FS_SHORTCUTS` | the shortcuts themselves, `;`-separated, e.g. `dataden=UUID;scratch=UUID:/scratch`; no file needed. Lmod: `append_path("GLOBUS_FS_SHORTCUTS", "dataden=UUID", ";")` |
+| `GLOBUS_FS_COLOR` | `auto` (default: colour on a terminal), `always` or `never`, for the `globus-fs shell` prompt; `NO_COLOR` is honoured too |
 | `GLOBUS_FS_ARCHIVESCAN_SIZE` | default for `archivescan --size`, e.g. `10M`; built-in default `100M` |
 | `GLOBUS_FS_CLIENT_ID`, `GLOBUS_CONSOLE_CLIENT_ID` | use your own Globus client registration instead of the built-in one |
 | `GLOBUS_CONSOLE_CLIENT_SECRET` | with `GLOBUS_CONSOLE_CLIENT_ID`, run `globus-console` unattended as a service account |

@@ -409,6 +409,22 @@ your bookmark, else a site shortcut, else the collection's display name.
 `name:path` is relative to that name's base path, so it always resolves
 back to the same place.
 
+`globus-fs shell dataden` starts at the `dataden` bookmark or shortcut; a
+bare UUID starts at its root, as with `ls`.
+
+**The prompt** is coloured on a terminal, the way dstat colours its output:
+the collection in bold blue, the path in bold. A **high assurance**
+collection (one Globus marks for CUI or PHI) shows `HA` after its name, in
+white on red, as a reminder that names and output there may be sensitive:
+`[armis2 HA] /home/me>`. The `HA` is always there, colour or not.
+
+Only the 16 basic terminal colours are used, which every terminal theme
+adjusts for its own background. On a white terminal where the blue is too
+light, `globus-fs shell --bw` (also `--black-on-white` or `--blackonwhite`,
+as in dstat) uses a darker one. `GLOBUS_FS_COLOR=never` turns colour off (as
+does `NO_COLOR`, or `TERM=dumb`); `always` keeps it on. `pwd -v` also says
+whether the collection is high assurance.
+
 **Not a filesystem.** Nothing is mounted and no file is read: each command
 is the same Globus API call `globus-fs` makes, and the prompt always names
 the collection. What the shell adds is a current directory, so paths are
@@ -418,7 +434,7 @@ relative, plus Tab completion, `|` and `>`.
 | --- | --- |
 | `ls`, `stat`, `find`, `du`, `archivescan` | as above; the path defaults to the current directory |
 | `mkdir`, `mv` | as above, with relative paths |
-| `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it |
+| `cd PATH` | relative, `..`, `-`, `/absolute`, `~` (the collection's home), or `name:`, `name:/path`, `UUID:/path` for another collection. `cd` alone returns to where you entered it. `cd name` without the colon is a subdirectory, as in any shell; if there is none, the error says to add the colon |
 | `pwd` | prints `name:path`, using your bookmark or a site shortcut, which pastes back into `cd`, `globus-fs` and the like |
 | `pwd -u` | prints `UUID:/path`, for `globus-cli`, the web app, or anyone without your names |
 | `pwd -v` | both, plus the collection's Globus display name |
@@ -464,12 +480,19 @@ runs the lines as a script; its exit status is the last command's.
 ```sh
 globus-fs collections                    # what names exist here
 globus-fs collections --check-bookmarks  # flag names your bookmarks shadow
+globus-fs collections --search "data den" # find a UUID by its Globus name
 globus-fs collections --format json
 ```
 
 | option | |
 | --- | --- |
 | `--check-bookmarks` | mark names shadowed by one of your own bookmarks (makes an API call) |
+| `--search TEXT` | find Globus collections by display name, as the web app shows them, to get the UUID for a bookmark |
+
+Display names (what the web app shows) are not targets: they are not
+unique. When a name is not a bookmark or shortcut, the error lists Globus
+collections whose display name matches, with the UUID and the
+`bookmark create` line to give one a short name.
 
 With nothing configured it prints every place it looked, the environment
 variable included even when unset, and suggests `bookmark create` for a

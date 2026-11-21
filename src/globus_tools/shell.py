@@ -61,6 +61,53 @@ FIND_ALIASES = {
     "-maxdepth": "--maxdepth",
 }
 
+#: Prompt colours, as dstat's: the 16 basic ANSI colours, which every
+#: terminal theme tunes for its own background (256-colour codes are fixed
+#: shades the theme cannot adjust, and wash out on white). Bold blue for
+#: the collection, as ls shows directories; bold white on red for high
+#: assurance, as dstat shows errors; the path bold in the terminal's colour.
+LABEL_COLOR = "1;34"
+HA_COLOR = "1;37;41"
+PATH_COLOR = "1"
+
+#: With --bw: dstat's black-on-white blue, which bold can turn too light.
+LABEL_COLOR_BW = "0;34"
+
+
+def use_color():
+    """Whether the prompt is coloured.
+
+    ``GLOBUS_FS_COLOR=always|never|auto`` decides; auto, the default, means
+    an interactive terminal, without ``NO_COLOR`` set or ``TERM=dumb``.
+
+    :returns: True to colour the prompt
+    """
+    choice = os.environ.get("GLOBUS_FS_COLOR", "auto").lower()
+    if choice == "always":
+        return True
+    if choice == "never":
+        return False
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        return False
+
+
+def _paint(code, text):
+    """Colour text for the prompt, marked so readline counts its width right.
+
+    ``\\001``/``\\002`` tell readline the escape codes take no space;
+    without them line editing miscounts the prompt.
+
+    :param code: the SGR code, e.g. ``"36"``
+    :param text: the text, already escaped
+    :returns: the coloured text
+    """
+    return f"\001\033[{code}m\002{text}\001\033[0m\002"
+
+
 #: Seconds a directory listing is reused for tab completion.
 COMPLETION_TTL = 30
 
@@ -326,15 +373,17 @@ def normalize(path):
 class GlobusShell(cmd.Cmd):
     """The interactive loop, with one collection and directory at a time."""
 
-    def __init__(self, tool, start=None):
+    def __init__(self, tool, start=None, black_on_white=False):
         """Set up a shell; nothing touches the API until it runs.
 
         :param tool: the globus-fs :class:`~globus_tools.common.Tool`
         :param start: where to begin, as typed after ``globus-fs shell``
+        :param black_on_white: colours for a white terminal (``--bw``)
         """
         super().__init__()
         self.tool = tool
         self.start = start
+        self.black_on_white = black_on_white
         self.parser = fs.build_parser(in_shell=True)
         self.interactive = sys.stdin.isatty()
         self.here = None  # (collection, path, name it was entered by, or None)
@@ -343,7 +392,7 @@ class GlobusShell(cmd.Cmd):
         self.status = 0
         self._tc = None
         self._cache = {}
-        self._display_names = {}
+        self._collections = {}  # UUID -> its Globus document, fetched once
         self._set_prompt()
 
     # ---- state ----------------------------------------------------------
@@ -358,15 +407,29 @@ class GlobusShell(cmd.Cmd):
         return self._tc
 
     def _set_prompt(self):
-        """Show the collection and directory, and nothing when scripted."""
+        """Show the collection and directory, and nothing when scripted.
+
+        A high assurance collection is marked ``HA`` in words, not only in
+        colour; colour, when on, makes the label bold blue (white on red for
+        high assurance) and the path bold, as dstat colours its output.
+        """
         if not self.interactive:
             self.prompt = ""
-        elif self.here is None:
+            return
+        if self.here is None:
             self.prompt = "(no collection)> "
-        else:
-            collection, path, entered = self.here
-            label = self.label(collection, path, entered)
-            self.prompt = f"[{escape_text(label)}] {escape_text(path)}> "
+            return
+        collection, path, entered = self.here
+        label = escape_text(self.label(collection, path, entered))
+        high = self.high_assurance(collection)
+        if high:
+            label += " HA"
+        path = escape_text(path)
+        if use_color():
+            plain = LABEL_COLOR_BW if self.black_on_white else LABEL_COLOR
+            label = _paint(HA_COLOR if high else plain, label)
+            path = _paint(PATH_COLOR, path)
+        self.prompt = f"[{label}] {path}> "
 
     def resolve(self, text):
         """Turn what was typed into a collection, a path and how it was named.
@@ -396,8 +459,9 @@ class GlobusShell(cmd.Cmd):
                     return collection, normalize(fs._join_within(base, tail)), head
         if self.here is None:
             raise ShellError(
-                "not on a collection yet: cd NAME: or cd UUID:/path first "
-                "('collections' and 'bookmark list' show the names)"
+                "not on a collection yet: cd NAME: or cd UUID:/path first, "
+                "where NAME is a bookmark or collection shortcut "
+                "('collections' and 'bookmark list' show them)"
             )
         collection, cwd, entered = self.here
         if not text or text == ".":
@@ -405,6 +469,27 @@ class GlobusShell(cmd.Cmd):
         if text == "~" or text.startswith("~/"):
             return collection, normalize("/~/" + text[2:]), entered
         return collection, normalize(posixpath.join(cwd, text)), entered
+
+    def _start_location(self, start):
+        """Accept a bare name or UUID as where to start, as ls does.
+
+        With nothing to be relative to yet, ``dataden`` can only mean the
+        shortcut or bookmark, so it starts at ``dataden:``.
+
+        :param start: the target given to ``globus-fs shell``
+        :returns: the target to cd to, or None after explaining a bad one
+        """
+        if ":" in start:
+            return start
+        if is_uuid(start) or self._is_location(start):
+            return start + ":"
+        print(
+            f"globus-fs shell: '{escape_text(start)}' is not a collection UUID, "
+            "a bookmark or a collection shortcut.\n"
+            + fs._known_names_hint(self.tc, start),
+            file=sys.stderr,
+        )
+        return None
 
     # ---- names for humans ------------------------------------------------
     def _names_on(self, collection):
@@ -462,13 +547,29 @@ class GlobusShell(cmd.Cmd):
         :param collection: the collection UUID
         :returns: the display name, or None if it cannot be had
         """
-        if collection not in self._display_names:
+        return self._collection(collection).get("display_name") or None
+
+    def high_assurance(self, collection):
+        """Whether Globus marks a collection as high assurance.
+
+        :param collection: the collection UUID
+        :returns: True for a high assurance collection
+        """
+        return bool(self._collection(collection).get("high_assurance"))
+
+    def _collection(self, collection):
+        """A collection's Globus document, fetched once per session.
+
+        :param collection: the collection UUID
+        :returns: the document, or an empty dict if it cannot be had
+        """
+        if collection not in self._collections:
             try:
                 doc = self.tool.call(self.tc.get_endpoint, collection)
-                self._display_names[collection] = doc.get("display_name") or None
+                self._collections[collection] = dict(doc.data)
             except globus_sdk.GlobusAPIError:
-                self._display_names[collection] = None
-        return self._display_names[collection]
+                self._collections[collection] = {}
+        return self._collections[collection]
 
     def label(self, collection, path, entered=None):
         """What the prompt calls the current collection.
@@ -516,7 +617,10 @@ class GlobusShell(cmd.Cmd):
         :returns: the status of the last command, as a script would see it
         """
         if self.start:
-            self.onecmd(f"cd {shlex.quote(self.start)}")
+            start = self._start_location(self.start)
+            if start is None:
+                return 1
+            self.onecmd(f"cd {shlex.quote(start)}")
             if self.status:
                 return self.status
         if self.interactive:
@@ -835,6 +939,8 @@ class GlobusShell(cmd.Cmd):
             try:
                 entry = self.tool.call(self.tc.operation_stat, collection, path)
             except globus_sdk.GlobusAPIError as e:
+                if e.http_status == 404 and words:
+                    self._cd_hint(words[0])
                 self.tool.api_error(e)
             if entry.get("type") != "dir":
                 raise ShellError(f"{path}: not a directory")
@@ -843,6 +949,37 @@ class GlobusShell(cmd.Cmd):
             self.home = target
         self.previous, self.here = self.here, target
         self._set_prompt()
+
+    def _cd_hint(self, word):
+        """Explain a cd that found nothing, when the word looks like a name.
+
+        ``cd dataden`` means a subdirectory, as in any shell; if there is
+        none but a shortcut or bookmark has that name, say how to reach it.
+        ``cd nosuch:`` names nothing known; suggest Globus collections whose
+        display name matches.
+
+        :param word: what was typed after cd
+        :raises ShellError: with the hint, when there is one
+        """
+        head, sep, _ = word.partition(":")
+        if not head or "/" in head or is_uuid(head):
+            return
+        if not sep and self._is_location(head):
+            kind = (
+                "bookmark"
+                if fs.resolve_bookmark(self.tc, head)
+                else "collection shortcut"
+            )
+            raise ShellError(
+                f"no directory {escape_text(word)} here. For your {kind} of "
+                f"that name: cd {escape_text(head)}:"
+            )
+        if sep and not self._is_location(head):
+            raise ShellError(
+                f"no directory {escape_text(word)} here, and no bookmark or "
+                f"collection shortcut named {escape_text(head)}."
+                + fs.display_name_hint(self.tc, head)
+            )
 
     def builtin_pwd(self, words):
         """pwd [-u | -v]: where you are, in a form you can paste back.
@@ -866,6 +1003,10 @@ class GlobusShell(cmd.Cmd):
             print(f"      name: {safe(named[1]) if named else '-'}")
             print(f"collection: {safe(self.display_name(collection) or '-')}")
             print(f"      uuid: {safe(uuid_form)}")
+            print(
+                "high assurance: "
+                + ("yes" if self.high_assurance(collection) else "no")
+            )
 
     def builtin_lcd(self, words):
         """lcd [DIR]: change the local directory > and >> write in.
